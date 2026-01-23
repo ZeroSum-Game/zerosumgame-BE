@@ -1,0 +1,198 @@
+// schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------
+// 1. User (유저 정보 + 전적)
+// ------------------------------------------
+model User {
+  id         Int      @id @default(autoincrement())
+  googleId   String   @unique
+  email      String   @unique
+  nickname   String
+  totalWins  Int      @default(0)
+  totalGames Int      @default(0)
+  createdAt  DateTime @default(now())
+  
+  players    Player[]
+}
+
+// ------------------------------------------
+// 2. Room (게임 방 - 시연용 1번 방)
+// ------------------------------------------
+model Room {
+  id            Int        @id @default(autoincrement())
+  roomCode      String     @unique
+  status        RoomStatus @default(WAITING)
+  currentTurn   Int        @default(1)
+  maxTurn       Int        @default(10)
+  turnPlayerIdx Int        @default(0)
+  createdAt     DateTime   @default(now())
+
+  players       Player[]
+  lands         GameLand[]
+  market        Market?
+  logs          GameLog[]
+}
+
+// ------------------------------------------
+// 3. Player (게임 캐릭터)
+// ------------------------------------------
+model Player {
+  id         Int       @id @default(autoincrement())
+  
+  user       User      @relation(fields: [userId], references: [id])
+  userId     Int
+  
+  room       Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId     Int
+
+  socketId   String?   // 재접속용
+  isReady    Boolean   @default(false)
+  isHost     Boolean   @default(false)
+  order      Int       @default(0)
+  
+  character  Character? // MUSK, LEE, TRUMP, PUTIN
+  
+  cash       BigInt    @default(2000000)
+  totalAsset BigInt    @default(2000000) // 랭킹용
+  
+  location   Int       @default(0) // 0 ~ 31
+  isBankrupt Boolean   @default(false) // 파산 여부 (승리조건 1)
+  isResting  Boolean   @default(false) // 세계여행 쉼
+
+  assets     PlayerAsset?
+  lands      GameLand[]
+}
+
+// ------------------------------------------
+// 4. PlayerAsset (보유 자산 - 소수점 X)
+// ------------------------------------------
+model PlayerAsset {
+  id        Int     @id @default(autoincrement())
+  player    Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  playerId  Int     @unique
+
+  samsung   Int     @default(0)
+  tesla     Int     @default(0)
+  lockheed  Int     @default(0)
+  gold      Int     @default(0)
+  bitcoin   Int     @default(0)
+}
+
+// ------------------------------------------
+// 5. MapNode (고정 맵 정보)
+// ------------------------------------------
+model MapNode {
+  nodeIdx   Int       @id // 0~31 직접 입력
+  name      String
+  type      TileType
+  continent Continent @default(SPECIAL)
+  basePrice BigInt    @default(0)
+  baseToll  BigInt    @default(0)
+
+  gameLands GameLand[]
+}
+
+// ------------------------------------------
+// 6. GameLand (땅 소유 현황)
+// ------------------------------------------
+model GameLand {
+  id            Int     @id @default(autoincrement())
+  
+  room          Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId        Int
+  
+  node          MapNode @relation(fields: [nodeIdx], references: [nodeIdx])
+  nodeIdx       Int
+  
+  owner         Player? @relation(fields: [ownerId], references: [id])
+  ownerId       Int?
+
+  isLandmark    Boolean @default(false)
+  hasWorldCup   Boolean @default(false) // 올림픽/엑스포 (통행료 폭등)
+  purchasePrice BigInt  @default(0)     // 인수 비용 계산용
+}
+
+// ------------------------------------------
+// 7. Market (주식/코인 시세)
+// ------------------------------------------
+model Market {
+  id             Int    @id @default(autoincrement())
+  room           Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId         Int    @unique
+
+  // 현재가
+  priceSamsung   BigInt @default(50000)
+  priceTesla     BigInt @default(300000)
+  priceLockheed  BigInt @default(100000) // 한화에어로 or 록히드
+  priceGold      BigInt @default(100000)
+  priceBtc       BigInt @default(50000000)
+  
+  // 이전 턴 가격 (등락폭 표시용)
+  prevSamsung    BigInt @default(50000)
+  prevTesla      BigInt @default(300000)
+  prevLockheed   BigInt @default(100000)
+  prevGold       BigInt @default(100000)
+  prevBtc        BigInt @default(50000000)
+}
+
+// ------------------------------------------
+// 8. GameLog (로그)
+// ------------------------------------------
+model GameLog {
+  id        Int      @id @default(autoincrement())
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId    Int
+  turn      Int?
+  message   String
+  createdAt DateTime @default(now())
+}
+
+// ------------------------------------------
+// Enums
+// ------------------------------------------
+enum RoomStatus {
+  WAITING
+  PLAYING
+  ENDED
+}
+
+enum Character {
+  MUSK
+  LEE
+  TRUMP
+  PUTIN
+}
+
+enum TileType {
+  START
+  LAND
+  STOCK
+  MINI
+  EXPO
+  ISLAND
+  JAIL   // 감옥 대신 'WAR'로 써도 됨 (이름만 JAIL이고 기능은 전쟁)
+  TAX
+  KEY
+}
+
+enum Continent {
+  ASIA
+  EUROPE
+  AFRICA
+  AMERICA
+  SPECIAL
+}
+
+generator erd {
+  provider = "prisma-erd-generator"
+  output   = "./ERD.svg"
+}

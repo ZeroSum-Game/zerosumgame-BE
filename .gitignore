@@ -1,0 +1,25 @@
+# 의존성 패키지 (용량이 커서 올리지 않아요)
+node_modules/
+
+# 환경 변수 (구글 ID, Secret 등 보안 데이터)
+.env
+.env.local
+.env.*
+
+# Prisma 관련 (자동 생성되는 파일들)
+/generated/prisma
+schema.prisma.bak
+
+# OS 설정 파일 (맥/윈도우 시스템 파일)
+.DS_Store
+Thumbs.db
+
+# 로그 파일
+npm-debug.log*
+yarn-error.log*
+
+# 서버 접속 키 파일 숨기기
+*.pem
+*.ppk
+zerosum.pem
+zerosum.ppk
