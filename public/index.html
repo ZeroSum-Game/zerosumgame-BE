@@ -44,6 +44,7 @@ h1 { margin: 10px 0 16px; color: #333; }
 </div>
 <div class="action-area">
 <button class="roll-btn" id="roll-btn">주사위 굴리기 🎲</button>
+<button class="roll-btn" id="purchase-btn" style="display:none;margin-left:8px;background:#e53935;">구매하기</button>
 <div class="location-text" id="location-text">현재 위치: -</div>
 </div>
 <div class="board-container" id="board">맵을 불러오는 중..</div>
@@ -56,11 +57,22 @@ const cashText = document.getElementById("cash-text");
 const loginBtn = document.getElementById("login-btn");
 const logoutBtn = document.getElementById("logout-btn");
 const rollBtn = document.getElementById("roll-btn");
+const purchaseBtn = document.getElementById("purchase-btn");
+const rollArea = document.querySelector(".action-area");
 const locationText = document.getElementById("location-text");
 const mapByIdx = new Map();
 loginBtn.addEventListener("click", () => { window.location.href = "/auth/google"; });
 logoutBtn.addEventListener("click", () => { window.location.href = "/api/auth/logout"; });
 rollBtn.addEventListener("click", () => { socket.emit("roll_dice"); });
+purchaseBtn.addEventListener("click", async () => {
+try {
+const response = await fetch("/api/game/purchase", { method: "POST" });
+if (!response.ok) { const err = await response.json().catch(() => ({})); alert(err.error || "구매 실패"); return; }
+const result = await response.json();
+if (typeof result.cash !== "undefined") cashText.innerText = `${Number(result.cash).toLocaleString()}원`;
+purchaseBtn.style.display = "none";
+} catch (e) { alert("구매 실패"); }
+});
 socket.on("connect", () => {
 statusEl.innerText = "연결됨";
 statusEl.className = "connection-status on";
@@ -84,6 +96,7 @@ const cash = data?.player?.cash;
 if (typeof cash !== "undefined") {
 cashText.innerText = `${Number(cash).toLocaleString()}원`;
 }
+updatePurchaseButton(idx);
 });
 socket.on("roll_error", (data) => { alert(data?.message || "주사위 오류"); });
 async function loadMap() {
@@ -123,6 +136,25 @@ cashText.innerText = "-";
 authStatusEl.innerText = "로그인 필요";
 cashText.innerText = "-";
 }
+}
+function updatePurchaseButton(idx) {
+if (typeof idx !== "number") { purchaseBtn.style.display = "none"; return; }
+if (authStatusEl.innerText !== "로그인됨") { purchaseBtn.style.display = "none"; return; }
+const node = mapByIdx.get(idx);
+const land = node?.gameLands?.[0];
+const canBuy = node?.type === "LAND" && !land?.ownerId;
+purchaseBtn.style.display = canBuy ? "inline-block" : "none";
+purchaseBtn.style.marginLeft = "8px";
+purchaseBtn.style.fontSize = "18px";
+purchaseBtn.style.padding = "14px 22px";
+purchaseBtn.style.background = "#e53935";
+purchaseBtn.style.color = "#fff";
+purchaseBtn.style.borderRadius = "10px";
+purchaseBtn.style.fontWeight = "800";
+rollArea.style.display = "flex";
+rollArea.style.justifyContent = "center";
+rollArea.style.alignItems = "center";
+rollArea.style.gap = "10px";
 }
 loadMap();
 checkAuth();
