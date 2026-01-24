@@ -67,6 +67,7 @@ model Player {
   location   Int       @default(0) // 0 ~ 31
   isBankrupt Boolean   @default(false) // 파산 여부 (승리조건 1)
   isResting  Boolean   @default(false) // 세계여행 쉼
+  extraTurnUsed Boolean @default(false)
 
   assets     PlayerAsset?
   lands      GameLand[]

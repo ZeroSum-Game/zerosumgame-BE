@@ -1,137 +1,131 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZeroSum Game Demo</title>
-    <script src="/socket.io/socket.io.js"></script>
-    <style>
-        body { font-family: 'Noto Sans KR', sans-serif; text-align: center; background-color: #f0f2f5; margin: 0; padding: 20px; }
-        h1 { margin-top: 10px; color: #333; }
-        .status-bar { background: #fff; padding: 10px; border-radius: 8px; display: inline-block; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-        .connection-status { color: #ff4757; font-weight: bold; }
-        .connection-status.on { color: #2ed573; }
-        
-        /* 게임판 레이아웃 */
-        .board-container {
-            display: grid;
-            grid-template-columns: repeat(8, 1fr);
-            gap: 5px;
-            max-width: 1000px;
-            margin: 0 auto;
-            background: #ddd;
-            padding: 10px;
-            border-radius: 10px;
-        }
-
-        .cell {
-            border: 1px solid #ddd;
-            padding: 10px 5px;
-            border-radius: 5px;
-            font-size: 12px;
-            font-weight: bold;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            min-height: 80px;
-            background-color: #fff;
-            position: relative;
-        }
-
-        /* 칸 종류별 색상 (하은님 기존 설정 유지) */
-        .START { background-color: #ffeba7; }
-        .LAND { background-color: #e3f2fd; }
-        .STOCK { background-color: #ffe0b2; color: #e65100; }
-        .JAIL { background-color: #cfd8dc; }
-        .KEY { background-color: #fff9c4; }
-        .MINI { background-color: #f8bbd0; }
-        .EXPO { background-color: #e1bee7; }
-        .ISLAND { background-color: #b2dfdb; }
-        .TAX { background-color: #ffccbc; }
-
-        .price { font-size: 10px; color: #666; margin-top: 5px; }
-        .idx { position: absolute; top: 2px; left: 5px; font-size: 8px; color: #aaa; }
-    </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ZeroSum Game Demo</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+body { font-family: "Noto Sans KR", sans-serif; text-align: center; background-color: #f0f2f5; margin: 0; padding: 20px; }
+h1 { margin: 10px 0 16px; color: #333; }
+.top-bar { display: flex; justify-content: center; gap: 10px; margin-bottom: 12px; }
+.top-bar button { padding: 8px 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+.login-btn { background: #4f8ef7; color: #fff; }
+.logout-btn { background: #ff6b6b; color: #fff; }
+.status-bar { background: #fff; padding: 10px; border-radius: 8px; display: inline-block; margin-bottom: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+.connection-status { color: #ff4757; font-weight: bold; }
+.connection-status.on { color: #2ed573; }
+.action-area { margin: 16px 0 10px; }
+.roll-btn { padding: 12px 18px; font-size: 16px; border: none; border-radius: 8px; background: #222; color: #fff; cursor: pointer; }
+.location-text { margin-top: 10px; font-weight: 700; }
+.board-container { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; max-width: 1000px; margin: 0 auto; background: #ddd; padding: 10px; border-radius: 10px; }
+.cell { border: 1px solid #ddd; padding: 10px 5px; border-radius: 5px; font-size: 12px; font-weight: bold; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 80px; background-color: #fff; position: relative; }
+.START { background-color: #ffeba7; }
+.LAND { background-color: #e3f2fd; }
+.STOCK { background-color: #ffe0b2; color: #e65100; }
+.JAIL { background-color: #cfd8dc; }
+.KEY { background-color: #fff9c4; }
+.MINI { background-color: #f8bbd0; }
+.EXPO { background-color: #e1bee7; }
+.ISLAND { background-color: #b2dfdb; }
+.TAX { background-color: #ffccbc; }
+.price { font-size: 10px; color: #666; margin-top: 5px; }
+.idx { position: absolute; top: 2px; left: 5px; font-size: 8px; color: #aaa; }
+</style>
 </head>
 <body>
-
-    <h1>🎲 제로섬 게임 (ZeroSum)</h1>
-    
-    <div class="status-bar">
-        상태: <span id="status" class="connection-status">연결 시도 중...</span> | 
-        ID: <span id="my-id">-</span>
-    </div>
-
-    <div class="board-container" id="board">맵을 불러오는 중...</div>
-
-    <script>
-        // --- 1. 소켓 연결 및 이벤트 설정 ---
-        const socket = io();
-        const statusEl = document.getElementById('status');
-        const idEl = document.getElementById('my-id');
-
-        // 연결 성공 시
-        socket.on("connect", () => {
-            statusEl.innerText = "연결됨 ✅";
-            statusEl.className = "connection-status on";
-            idEl.innerText = socket.id;
-            
-            // 서버에 1번 방 입장 요청 (계획표대로!)
-            socket.emit("join_room", 1);
-        });
-
-        // 입장 성공 알림 받기
-        socket.on("join_success", (data) => {
-            console.log("📢 서버 메시지:", data.message);
-        });
-
-        // 다른 유저 입장 시 시스템 메시지 받기
-        socket.on("system_msg", (data) => {
-            console.log("🔔 알림:", data.message);
-            // 가볍게 콘솔이나 알림창으로 확인
-        });
-
-        // 연결 끊김 시
-        socket.on("disconnect", () => {
-            statusEl.innerText = "연결 끊김 ❌";
-            statusEl.className = "connection-status";
-        });
-
-
-        // --- 2. API를 이용한 맵 데이터 로딩 ---
-        async function loadMap() {
-            try {
-                const response = await fetch('/api/map');
-                const mapData = await response.json();
-
-                const boardDiv = document.getElementById('board');
-                boardDiv.innerHTML = ''; 
-
-                mapData.forEach(node => {
-                    const cell = document.createElement('div');
-                    cell.className = `cell ${node.type}`;
-                    
-                    let priceText = '';
-                    if (node.basePrice > 0) {
-                        priceText = `<div class="price">₩${Number(node.basePrice).toLocaleString()}</div>`;
-                    }
-                    
-                    cell.innerHTML = `
-                        <span class="idx">${node.nodeIdx}</span>
-                        <span>${node.name}</span>
-                        ${priceText}
-                    `;
-                    boardDiv.appendChild(cell);
-                });
-            } catch (error) {
-                console.error("맵 로딩 실패:", error);
-                document.getElementById('board').innerText = "맵 데이터를 불러오지 못했습니다.";
-            }
-        }
-
-        // 페이지 로드 시 맵 실행
-        loadMap();
-    </script>
+<h1>제로섬 게임 (ZeroSum)</h1>
+<div class="top-bar">
+<button class="login-btn" id="login-btn">구글 로그인</button>
+<button class="logout-btn" id="logout-btn">로그아웃</button>
+</div>
+<div class="status-bar">
+상태: <span id="status" class="connection-status">연결 시도 중..</span> | ID: <span id="my-id">-</span> | 로그인: <span id="auth-status">확인 중..</span> | 잔액: <span id="cash-text">-</span>
+</div>
+<div class="action-area">
+<button class="roll-btn" id="roll-btn">주사위 굴리기 🎲</button>
+<div class="location-text" id="location-text">현재 위치: -</div>
+</div>
+<div class="board-container" id="board">맵을 불러오는 중..</div>
+<script>
+const socket = io();
+const statusEl = document.getElementById("status");
+const idEl = document.getElementById("my-id");
+const authStatusEl = document.getElementById("auth-status");
+const cashText = document.getElementById("cash-text");
+const loginBtn = document.getElementById("login-btn");
+const logoutBtn = document.getElementById("logout-btn");
+const rollBtn = document.getElementById("roll-btn");
+const locationText = document.getElementById("location-text");
+const mapByIdx = new Map();
+loginBtn.addEventListener("click", () => { window.location.href = "/auth/google"; });
+logoutBtn.addEventListener("click", () => { window.location.href = "/api/auth/logout"; });
+rollBtn.addEventListener("click", () => { socket.emit("roll_dice"); });
+socket.on("connect", () => {
+statusEl.innerText = "연결됨";
+statusEl.className = "connection-status on";
+idEl.innerText = socket.id;
+socket.emit("join_room", 1);
+});
+socket.on("disconnect", () => {
+statusEl.innerText = "연결 끊김";
+statusEl.className = "connection-status";
+});
+socket.on("dice_rolled", (data) => {
+const dice1 = data?.dice1 ?? "?";
+const dice2 = data?.dice2 ?? "?";
+alert(`주사위: ${dice1}, ${dice2}`);
+const idx = data?.player?.location;
+if (typeof idx === "number" && mapByIdx.has(idx)) {
+const name = mapByIdx.get(idx)?.name || "-";
+locationText.innerText = `현재 위치: ${idx}번 ${name}`;
+}
+const cash = data?.player?.cash;
+if (typeof cash !== "undefined") {
+cashText.innerText = `${Number(cash).toLocaleString()}원`;
+}
+});
+socket.on("roll_error", (data) => { alert(data?.message || "주사위 오류"); });
+async function loadMap() {
+try {
+const response = await fetch("/api/map");
+const mapData = await response.json();
+const boardDiv = document.getElementById("board");
+boardDiv.innerHTML = "";
+mapData.forEach((node) => {
+mapByIdx.set(node.nodeIdx, node);
+const cell = document.createElement("div");
+cell.className = `cell ${node.type}`;
+const priceText = node.basePrice > 0 ? `<div class="price">₩${Number(node.basePrice).toLocaleString()}</div>` : "";
+cell.innerHTML = `<span class="idx">${node.nodeIdx}</span><span>${node.name}</span>${priceText}`;
+boardDiv.appendChild(cell);
+});
+} catch (error) {
+console.error("맵 로딩 실패:", error);
+document.getElementById("board").innerText = "맵 데이터를 불러오지 못했습니다.";
+}
+}
+async function checkAuth() {
+try {
+const response = await fetch("/api/me");
+if (response.ok) {
+authStatusEl.innerText = "로그인됨";
+const user = await response.json();
+const playerCash = user?.players?.[0]?.cash;
+if (typeof playerCash !== "undefined") {
+cashText.innerText = `${Number(playerCash).toLocaleString()}원`;
+}
+return;
+}
+authStatusEl.innerText = "로그인 필요";
+cashText.innerText = "-";
+} catch (error) {
+authStatusEl.innerText = "로그인 필요";
+cashText.innerText = "-";
+}
+}
+loadMap();
+checkAuth();
+</script>
 </body>
 </html>

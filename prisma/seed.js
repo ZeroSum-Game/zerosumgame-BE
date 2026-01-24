@@ -33,7 +33,7 @@ async function main() {
       basePrice: 665000, // 기획서 반영
       baseToll: 330000,
     },
-    { nodeIdx: 4, name: "현대차", type: "STOCK", continent: "SPECIAL" },
+    { nodeIdx: 4, name: "테슬라", type: "STOCK", continent: "SPECIAL" },
     {
       nodeIdx: 5,
       name: "중국",
@@ -89,7 +89,7 @@ async function main() {
       basePrice: 567000, // 기획서 반영
       baseToll: 280000,
     },
-    { nodeIdx: 14, name: "SK하이닉스", type: "STOCK", continent: "SPECIAL" },
+    { nodeIdx: 14, name: "록히드마틴", type: "STOCK", continent: "SPECIAL" },
     {
       nodeIdx: 15,
       name: "남아공",
