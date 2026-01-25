@@ -378,7 +378,9 @@ function createGameLogic({prisma,io,market}){
           if(player.room?.status!=="WAITING")throw new Error("Game already started");
           // 현재 접속 중인 플레이어(socketId가 있는)만 캐릭터 중복 체크
           const others=await getLatestPlayersByUser(tx,player.roomId);
-          const activeOthers=others.filter((p)=>p.socketId&&p.userId!==player.userId);
+          // socketId는 DB에 남아있을 수 있어 실제 연결 여부는 io에서 확인
+          const isActiveSocket=(sid)=>!!sid&&!!io&&!!io.sockets&&!!io.sockets.sockets&&io.sockets.sockets.has(sid);
+          const activeOthers=others.filter((p)=>p.userId!==player.userId&&isActiveSocket(p.socketId));
           if(activeOthers.some((p)=>p.character===character))throw new Error("Character already taken");
           let cash=INITIAL_CASH;
           let assets=player.assets||await tx.playerAsset.create({data:{playerId:player.id}});

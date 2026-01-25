@@ -326,7 +326,15 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
       }
     });
 
-    socket.on("disconnect",()=>{
+    socket.on("disconnect",async()=>{
+      // DB에 socketId가 남아있으면 REST API에서 "active"로 오인해서
+      // 캐릭터 중복 체크가 잘못 동작할 수 있어 disconnect 시 정리합니다.
+      try{
+        await prisma.player.updateMany({where:{socketId:socket.id},data:{socketId:null}});
+      }catch(e){
+        console.log("[disconnect] Failed to clear socketId: "+(e?.message||e));
+      }
+
       const info=socketUserMap.get(socket.id);
       if(!info)return;
       socketUserMap.delete(socket.id);
