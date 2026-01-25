@@ -1,6 +1,7 @@
 function initSocketHandlers({io,prisma,auth,gameLogic,market}){
   const lobbyStateByRoom=new Map();
   const socketUserMap=new Map();
+  const orderPickingByRoom=new Map(); // 순서 뽑기 상태: {cards: [1,2,3,4], picks: Map<userId, cardNum>}
 
   io.use((socket,next)=>{
     try{
@@ -341,26 +342,126 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           socket.emit("start_error",{message:"All players must select a character"});
           return;
         }
-        const shuffled=shuffleArray(players.slice());
-        const orderPlayerIds=shuffled.map((p)=>p.id);
-        const orderUserIds=shuffled.map((p)=>p.userId);
-        gameLogic.roomTurnOrder.set(info.roomId,orderPlayerIds);
-        const currentTurn=orderUserIds[0]||null;
-        gameLogic.currentTurnUserByRoom.set(info.roomId,currentTurn);
-        market.clearTradeLock(info.roomId);
-        gameLogic.actionWindowByRoom.delete(info.roomId);
-        gameLogic.turnStateByRoom.set(info.roomId,{userId:currentTurn,rolled:false,extraRoll:false});
-        await prisma.room.update({where:{id:info.roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1}});
-        await prisma.$transaction(async(tx)=>market.resetMarketDefaults(tx,info.roomId));
-        const turnPlayerId=orderPlayerIds[0]||null;
-        const lobbyInfo=buildLobbyPayload(info.roomId);
-        const nicknameByUser=new Map(lobbyInfo.players.map((p)=>[p.userId,p.nickname]));
-        const playersPayload=players.map((p)=>({playerId:p.id,userId:p.userId,nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`,character:p.character||null,location:typeof p.location==="number"?p.location:0}));
-        console.log(`[System] Game Started. Turn Order: [${orderUserIds.join(", ")}]`);
-        io.to(info.roomId).emit("game_start",{turnPlayerId,currentTurn,turnOrder:orderUserIds,turnOrderPlayerIds:orderPlayerIds,players:playersPayload});
-        io.to(info.roomId).emit("lobby_update",buildLobbyPayload(info.roomId));
+
+        // 순서 뽑기 단계 시작 - 1,2,3,4 카드 준비
+        const availableCards=shuffleArray([1,2,3,4].slice(0,players.length));
+        orderPickingByRoom.set(info.roomId,{
+          cards:availableCards,
+          picks:new Map(),
+          players:players.map((p)=>({playerId:p.id,userId:p.userId}))
+        });
+
+        console.log(`[System] Order picking started for room ${info.roomId}. Cards: [${availableCards.join(", ")}]`);
+        io.to(info.roomId).emit("order_picking_start",{availableCards,playerCount:players.length});
       }catch(e){
         socket.emit("start_error",{message:"Failed to start game"});
+      }
+    });
+
+    // 순서 카드 선택
+    socket.on("pick_order_card",async(cardNumber)=>{
+      try{
+        const info=socketUserMap.get(socket.id);
+        if(!info)return;
+        const userId=socket.user?.id;
+        if(!userId)return;
+
+        const orderState=orderPickingByRoom.get(info.roomId);
+        if(!orderState){
+          socket.emit("pick_error",{message:"순서 뽑기가 진행중이 아닙니다."});
+          return;
+        }
+
+        // 이미 선택했는지 확인
+        if(orderState.picks.has(userId)){
+          socket.emit("pick_error",{message:"이미 카드를 선택했습니다."});
+          return;
+        }
+
+        // 유효한 카드인지 확인
+        const cardNum=Number(cardNumber);
+        if(!orderState.cards.includes(cardNum)){
+          socket.emit("pick_error",{message:"유효하지 않은 카드입니다."});
+          return;
+        }
+
+        // 이미 다른 사람이 선택한 카드인지 확인
+        const pickedCards=Array.from(orderState.picks.values());
+        if(pickedCards.includes(cardNum)){
+          socket.emit("pick_error",{message:"이미 선택된 카드입니다."});
+          return;
+        }
+
+        // 카드 선택 저장
+        orderState.picks.set(userId,cardNum);
+        console.log(`[Order Pick] User ${userId} picked card ${cardNum}`);
+
+        // 모든 클라이언트에게 선택 상황 알림
+        io.to(info.roomId).emit("order_card_picked",{
+          userId,
+          cardNumber:cardNum,
+          pickedCards:Array.from(orderState.picks.values()),
+          remainingCards:orderState.cards.filter((c)=>!Array.from(orderState.picks.values()).includes(c))
+        });
+
+        // 모든 플레이어가 선택했는지 확인
+        if(orderState.picks.size===orderState.players.length){
+          // 순서 결정 및 게임 시작
+          const sortedPlayers=[...orderState.players].sort((a,b)=>{
+            const aCard=orderState.picks.get(a.userId)||99;
+            const bCard=orderState.picks.get(b.userId)||99;
+            return aCard-bCard;
+          });
+
+          const orderPlayerIds=sortedPlayers.map((p)=>p.playerId);
+          const orderUserIds=sortedPlayers.map((p)=>p.userId);
+
+          gameLogic.roomTurnOrder.set(info.roomId,orderPlayerIds);
+          const currentTurn=orderUserIds[0]||null;
+          gameLogic.currentTurnUserByRoom.set(info.roomId,currentTurn);
+          market.clearTradeLock(info.roomId);
+          gameLogic.actionWindowByRoom.delete(info.roomId);
+          gameLogic.turnStateByRoom.set(info.roomId,{userId:currentTurn,rolled:false,extraRoll:false});
+
+          await prisma.room.update({where:{id:info.roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1}});
+          await prisma.$transaction(async(tx)=>market.resetMarketDefaults(tx,info.roomId));
+
+          const lobbyInfo=buildLobbyPayload(info.roomId);
+          const nicknameByUser=new Map(lobbyInfo.players.map((p)=>[p.userId,p.nickname]));
+          const allPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
+          const activeUserIds=new Set(lobbyInfo.players.map((p)=>p.userId));
+          const players=allPlayers.filter((p)=>activeUserIds.has(p.userId));
+
+          const playersPayload=players.map((p)=>({
+            playerId:p.id,
+            userId:p.userId,
+            nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`,
+            character:p.character||null,
+            location:typeof p.location==="number"?p.location:0
+          }));
+
+          // 순서 결과를 먼저 보여주고
+          const orderResults=sortedPlayers.map((p,idx)=>({
+            userId:p.userId,
+            playerId:p.playerId,
+            cardNumber:orderState.picks.get(p.userId),
+            turnOrder:idx+1,
+            nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`
+          }));
+
+          io.to(info.roomId).emit("order_picking_complete",{orderResults});
+
+          // 잠시 후 게임 시작
+          setTimeout(()=>{
+            const turnPlayerId=orderPlayerIds[0]||null;
+            console.log(`[System] Game Started. Turn Order: [${orderUserIds.join(", ")}]`);
+            io.to(info.roomId).emit("game_start",{turnPlayerId,currentTurn,turnOrder:orderUserIds,turnOrderPlayerIds:orderPlayerIds,players:playersPayload});
+            io.to(info.roomId).emit("lobby_update",buildLobbyPayload(info.roomId));
+            orderPickingByRoom.delete(info.roomId);
+          },3000);
+        }
+      }catch(e){
+        socket.emit("pick_error",{message:"카드 선택 실패"});
       }
     });
 
@@ -373,29 +474,41 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           console.log("emit failed: login session expired");
           return;
         }
+        const info=socketUserMap.get(socket.id);
+        if(!info){
+          socket.emit("roll_error",{message:"Room not joined"});
+          return;
+        }
+        // 먼저 주사위 굴리기 시작을 모든 클라이언트에게 알림 (관전자도 애니메이션 볼 수 있게)
+        io.to(info.roomId).emit("dice_rolling_started",{userId});
+
         const result=await gameLogic.rollDiceForUser({userId});
         const userRecord=await prisma.user.findUnique({where:{id:userId},select:{nickname:true}});
         const userName=userRecord?.nickname||"Player";
         console.log(`[${userName}] moved ${result.oldLocation} -> ${result.newLocation}`);
-        io.to(result.roomId).emit("dice_rolled",{userId,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,player:result.player,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
-        io.to(result.roomId).emit("playerMove",{userId,playerId:result.player.id,character:result.player.character,oldLocation:result.oldLocation,newLocation:result.newLocation,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
-        if(result.cardEvent){
-          io.to(result.roomId).emit("drawCard",result.cardEvent);
-        }
-        if(result.market){
-          io.to(result.roomId).emit("market_update",{samsung:result.market.priceSamsung,tesla:result.market.priceTesla,lockheed:result.market.priceLockheed,gold:result.market.priceGold,bitcoin:result.market.priceBtc,prevSamsung:result.market.prevSamsung,prevTesla:result.market.prevTesla,prevLockheed:result.market.prevLockheed,prevGold:result.market.prevGold,prevBtc:result.market.prevBtc});
-        }
-        if(result.war){
-          io.to(result.roomId).emit("war_state",result.war);
-          if(result.warStarted){
-            io.to(result.roomId).emit("war_start",result.war);
+
+        // 약간의 딜레이 후 결과 전송 (애니메이션 시간 확보)
+        setTimeout(()=>{
+          io.to(result.roomId).emit("dice_rolled",{userId,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,player:result.player,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
+          io.to(result.roomId).emit("playerMove",{userId,playerId:result.player.id,character:result.player.character,oldLocation:result.oldLocation,newLocation:result.newLocation,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
+          if(result.cardEvent){
+            io.to(result.roomId).emit("drawCard",result.cardEvent);
           }
-          if(result.warEnded){
-            io.to(result.roomId).emit("war_end",result.war);
+          if(result.market){
+            io.to(result.roomId).emit("market_update",{samsung:result.market.priceSamsung,tesla:result.market.priceTesla,lockheed:result.market.priceLockheed,gold:result.market.priceGold,bitcoin:result.market.priceBtc,prevSamsung:result.market.prevSamsung,prevTesla:result.market.prevTesla,prevLockheed:result.market.prevLockheed,prevGold:result.market.prevGold,prevBtc:result.market.prevBtc});
           }
-        }
-        await gameLogic.emitAssetUpdate(result.player.id);
-        if(result.tollOwnerId)await gameLogic.emitAssetUpdate(result.tollOwnerId);
+          if(result.war){
+            io.to(result.roomId).emit("war_state",result.war);
+            if(result.warStarted){
+              io.to(result.roomId).emit("war_start",result.war);
+            }
+            if(result.warEnded){
+              io.to(result.roomId).emit("war_end",result.war);
+            }
+          }
+          gameLogic.emitAssetUpdate(result.player.id);
+          if(result.tollOwnerId)gameLogic.emitAssetUpdate(result.tollOwnerId);
+        },800);
         console.log("emit success: true");
       }catch(e){
         socket.emit("roll_error",{message:e?.message||"Failed to roll dice"});
