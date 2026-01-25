@@ -52,10 +52,17 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
     gameLogic.warState.recoveryLine=1;
     gameLogic.warState.recoveryNode=1;
   }
+  function isActiveSocketId(socketId){
+    return !!socketId&&!!io&&!!io.sockets&&!!io.sockets.sockets&&io.sockets.sockets.has(socketId);
+  }
+  async function getActivePlayersByUser(roomId){
+    const players=await gameLogic.getLatestPlayersByUser(prisma,roomId);
+    return players.filter((p)=>isActiveSocketId(p.socketId));
+  }
   async function syncLobbyPlayers(roomId){
     const lobby=getLobbyState(roomId);
     if(lobby.players.size>0)return lobby;
-    const players=await gameLogic.getLatestPlayersByUser(prisma,roomId);
+    const players=await getActivePlayersByUser(roomId);
     if(players.length===0)return lobby;
     const users=await prisma.user.findMany({where:{id:{in:players.map((p)=>p.userId)}},select:{id:true,nickname:true}});
     const nicknameByUser=new Map(users.map((u)=>[u.id,u.nickname]));
@@ -71,7 +78,7 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
     return lobby;
   }
   async function buildResumePayload(roomId){
-    const players=await gameLogic.getLatestPlayersByUser(prisma,roomId);
+    const players=await getActivePlayersByUser(roomId);
     const users=players.length?await prisma.user.findMany({where:{id:{in:players.map((p)=>p.userId)}},select:{id:true,nickname:true}}):[];
     const nicknameByUser=new Map(users.map((u)=>[u.id,u.nickname]));
     const playersPayload=players.map((p)=>({
@@ -86,10 +93,11 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
     const playerIdSet=new Set(playersPayload.map((p)=>p.playerId));
     const storedOrder=gameLogic.roomTurnOrder.get(roomId);
     const turnOrderPlayerIds=storedOrder?storedOrder.filter((id)=>playerIdSet.has(id)):playersPayload.map((p)=>p.playerId);
-    if(!storedOrder&&turnOrderPlayerIds.length)gameLogic.roomTurnOrder.set(roomId,turnOrderPlayerIds);
+    if(turnOrderPlayerIds.length)gameLogic.roomTurnOrder.set(roomId,turnOrderPlayerIds);
+    else gameLogic.roomTurnOrder.delete(roomId);
     const playerIdToUser=new Map(playersPayload.map((p)=>[p.playerId,p.userId]));
     const turnOrder=turnOrderPlayerIds.map((id)=>playerIdToUser.get(id)).filter((id)=>id!=null);
-    const turnPlayerId=await prisma.$transaction(async(tx)=>gameLogic.getTurnPlayerId(tx,roomId));
+    const turnPlayerId=turnOrderPlayerIds.length?await prisma.$transaction(async(tx)=>gameLogic.getTurnPlayerId(tx,roomId)):null;
     let currentTurn=gameLogic.currentTurnUserByRoom.get(roomId)||null;
     if(!currentTurn&&turnPlayerId){
       const turnPlayer=await prisma.player.findUnique({where:{id:turnPlayerId},select:{userId:true}});
@@ -118,6 +126,18 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           console.log(`[join_room] Room ${roomId} not found, creating...`);
           room=await prisma.room.create({data:{id:roomId,roomCode:"MAIN",status:"WAITING"}});
         }
+        if(room.status==="PLAYING"){
+          const activePlayers=await getActivePlayersByUser(roomId);
+          if(activePlayers.length===0){
+            room=await prisma.room.update({where:{id:roomId},data:{status:"WAITING",turnPlayerIdx:0,currentTurn:1}});
+            gameLogic.currentTurnUserByRoom.delete(roomId);
+            gameLogic.roomTurnOrder.delete(roomId);
+            market.clearTradeLock(roomId);
+            gameLogic.actionWindowByRoom.delete(roomId);
+            gameLogic.turnStateByRoom.delete(roomId);
+            resetWarState();
+          }
+        }
         const lobbyState=getLobbyState(roomId);
         // 인원 제한 체크 (최대 4명, 이미 있는 유저는 제외)
         const MAX_PLAYERS=4;
@@ -134,14 +154,6 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           gameLogic.actionWindowByRoom.delete(roomId);
           gameLogic.turnStateByRoom.delete(roomId);
           resetWarState();
-        }
-        if(room.status==="PLAYING"){
-          await syncLobbyPlayers(roomId);
-          if(!gameLogic.roomTurnOrder.get(roomId)){
-            const latestPlayers=await gameLogic.getLatestPlayersByUser(prisma,roomId);
-            const fallbackOrder=latestPlayers.slice().sort((a,b)=>a.id-b.id).map((p)=>p.id);
-            if(fallbackOrder.length)gameLogic.roomTurnOrder.set(roomId,fallbackOrder);
-          }
         }
         const user=await prisma.user.findUnique({where:{id:sessionUserId}});
         let player=await prisma.player.findFirst({where:{roomId,userId:sessionUserId},orderBy:{id:"desc"},include:{assets:true}});
@@ -162,6 +174,14 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         }
         if(room.status==="WAITING"&&player.character){
           player=await prisma.player.update({where:{id:player.id},data:{character:null},include:{assets:true}});
+        }
+        if(room.status==="PLAYING"){
+          await syncLobbyPlayers(roomId);
+          if(!gameLogic.roomTurnOrder.get(roomId)){
+            const activePlayers=await getActivePlayersByUser(roomId);
+            const fallbackOrder=activePlayers.slice().sort((a,b)=>a.id-b.id).map((p)=>p.id);
+            if(fallbackOrder.length)gameLogic.roomTurnOrder.set(roomId,fallbackOrder);
+          }
         }
         socket.join(roomId);
         socketUserMap.set(socket.id,{roomId,userId:sessionUserId});
@@ -233,7 +253,7 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         const turnState=gameLogic.turnStateByRoom.get(info.roomId);
         if(!turnState||turnState.userId!==userId||!turnState.rolled||turnState.extraRoll)throw new Error("Roll extra turn before ending");
         const order=gameLogic.roomTurnOrder.get(info.roomId);
-        const players=order&&order.length?order:(await gameLogic.getLatestPlayersByUser(prisma,info.roomId)).map((p)=>p.id);
+        const players=order&&order.length?order:(await getActivePlayersByUser(info.roomId)).map((p)=>p.id);
         if(players.length===0)throw new Error("Player count is zero");
         const nextIdx=(room.turnPlayerIdx+1)%players.length;
         await prisma.player.updateMany({where:{roomId:info.roomId,userId},data:{extraTurnUsed:false}});
