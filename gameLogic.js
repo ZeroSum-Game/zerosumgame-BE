@@ -376,8 +376,10 @@ function createGameLogic({prisma,io,market}){
           const player=await tx.player.findFirst({where:{userId:req.user.id},orderBy:{id:"desc"},include:{assets:true,room:true}});
           if(!player)throw new Error("Player not found");
           if(player.room?.status!=="WAITING")throw new Error("Game already started");
+          // 현재 접속 중인 플레이어(socketId가 있는)만 캐릭터 중복 체크
           const others=await getLatestPlayersByUser(tx,player.roomId);
-          if(others.some((p)=>p.userId!==player.userId&&p.character===character))throw new Error("Character already taken");
+          const activeOthers=others.filter((p)=>p.socketId&&p.userId!==player.userId);
+          if(activeOthers.some((p)=>p.character===character))throw new Error("Character already taken");
           let cash=INITIAL_CASH;
           let assets=player.assets||await tx.playerAsset.create({data:{playerId:player.id}});
           assets=await tx.playerAsset.update({where:{playerId:player.id},data:{samsung:0,tesla:0,lockheed:0,gold:0,bitcoin:0}});

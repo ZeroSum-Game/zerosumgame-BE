@@ -31,7 +31,8 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
       ready:lobby.readyUserIds.has(p.userId),
       isHost:lobby.hostUserId===p.userId
     }));
-    const allReady=players.filter((p)=>!p.isHost).every((p)=>p.ready);
+    // 모든 플레이어(방장 포함)가 준비되었는지 체크
+    const allReady=players.length>0&&players.every((p)=>p.ready);
     return{hostUserId:lobby.hostUserId,players,allReady};
   }
 
@@ -58,16 +59,24 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
     socket.on("join_room",async(roomId)=>{
       try{
         const sessionUserId=socket.user?.id;
+        console.log(`[join_room] User ${sessionUserId} attempting to join room ${roomId}`);
         if(!sessionUserId){
           socket.emit("join_error",{message:"User session not found"});
           return;
         }
         let room=await prisma.room.findUnique({where:{id:roomId}});
         if(!room){
-          socket.emit("join_error",{message:"Room not found"});
-          return;
+          console.log(`[join_room] Room ${roomId} not found, creating...`);
+          room=await prisma.room.create({data:{id:roomId,roomCode:"MAIN",status:"WAITING"}});
         }
         const lobbyState=getLobbyState(roomId);
+        // 인원 제한 체크 (최대 4명, 이미 있는 유저는 제외)
+        const MAX_PLAYERS=4;
+        if(!lobbyState.players.has(sessionUserId)&&lobbyState.players.size>=MAX_PLAYERS){
+          socket.emit("join_error",{message:`방이 가득 찼습니다 (최대 ${MAX_PLAYERS}명)`});
+          console.log(`[join_room] Room ${roomId} is full (${lobbyState.players.size}/${MAX_PLAYERS})`);
+          return;
+        }
         if(room.status!=="WAITING"&&lobbyState.players.size===0){
           room=await prisma.room.update({where:{id:roomId},data:{status:"WAITING",turnPlayerIdx:0,currentTurn:1}});
           gameLogic.currentTurnUserByRoom.delete(roomId);
@@ -108,10 +117,13 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         if(!lobby.hostUserId)lobby.hostUserId=sessionUserId;
         const turnPlayerId=await prisma.$transaction(async(tx)=>gameLogic.getTurnPlayerId(tx,roomId));
         const marketData=await prisma.$transaction(async(tx)=>market.getOrCreateMarket(tx,roomId));
-        socket.emit("join_success",{roomId,message:"Join success",player,turnPlayerId,war:gameLogic.getWarPayload(),roomStatus:room.status,lobby:buildLobbyPayload(roomId),currentTurn:gameLogic.currentTurnUserByRoom.get(roomId)||null});
+        const lobbyPayload=buildLobbyPayload(roomId);
+        console.log(`[join_room] User ${sessionUserId} joined room ${roomId}. Total players: ${lobbyPayload.players.length}`);
+        console.log(`[join_room] Players in room:`,lobbyPayload.players.map(p=>`${p.nickname}(${p.userId})`).join(", "));
+        socket.emit("join_success",{roomId,message:"Join success",player,turnPlayerId,war:gameLogic.getWarPayload(),roomStatus:room.status,lobby:lobbyPayload,currentTurn:gameLogic.currentTurnUserByRoom.get(roomId)||null});
         socket.emit("market_update",{samsung:marketData.priceSamsung,tesla:marketData.priceTesla,lockheed:marketData.priceLockheed,gold:marketData.priceGold,bitcoin:marketData.priceBtc,prevSamsung:marketData.prevSamsung,prevTesla:marketData.prevTesla,prevLockheed:marketData.prevLockheed,prevGold:marketData.prevGold,prevBtc:marketData.prevBtc});
         socket.emit("war_state",gameLogic.getWarPayload());
-        io.to(roomId).emit("lobby_update",buildLobbyPayload(roomId));
+        io.to(roomId).emit("lobby_update",lobbyPayload);
         await gameLogic.emitAssetUpdate(player.id);
       }catch(e){
         socket.emit("join_error",{message:"Failed to join room"});
@@ -123,7 +135,6 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         const info=socketUserMap.get(socket.id);
         if(!info)return;
         const lobby=getLobbyState(info.roomId);
-        if(info.userId===lobby.hostUserId)return;
         const player=await prisma.player.findFirst({where:{userId:info.userId,roomId:info.roomId},orderBy:{id:"desc"}});
         const isReady=!!ready;
         if(isReady&&(!player||!player.character)){
@@ -137,6 +148,7 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           if(entry)entry.character=player.character||null;
           if(player.character)io.to(info.roomId).emit("character_update",{playerId:player.id,userId:info.userId,character:player.character});
         }
+        console.log(`[set_ready] User ${info.userId} ready: ${isReady}`);
         io.to(info.roomId).emit("lobby_update",buildLobbyPayload(info.roomId));
       }catch(e){}
     });
