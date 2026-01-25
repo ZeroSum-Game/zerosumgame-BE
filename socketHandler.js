@@ -1,7 +1,7 @@
 function initSocketHandlers({io,prisma,auth,gameLogic,market}){
   const lobbyStateByRoom=new Map();
   const socketUserMap=new Map();
-  const orderPickingByRoom=new Map(); // 순서 뽑기 상태: {cards: [1,2,3,4], picks: Map<userId, cardNum>}
+  const orderPickingByRoom=new Map(); // 순서 뽑기 상태: {cardIds: [1..n], cardValues: Map<cardId, cardNumber>, picks: Map<userId, cardId>}
 
   io.use((socket,next)=>{
     try{
@@ -221,13 +221,8 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         }
         if(isReady)lobby.readyUserIds.add(info.userId);
         else lobby.readyUserIds.delete(info.userId);
-        if(player){
-          const entry=lobby.players.get(info.userId);
-          if(entry)entry.character=player.character||null;
-          if(player.character)io.to(info.roomId).emit("character_update",{playerId:player.id,userId:info.userId,character:player.character});
-        }
         console.log(`[set_ready] User ${info.userId} ready: ${isReady}`);
-        io.to(info.roomId).emit("lobby_update",buildLobbyPayload(info.roomId));
+        io.to(info.roomId).emit("ready_update",{userId:info.userId,ready:isReady});
       }catch(e){}
     });
 
@@ -343,10 +338,14 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           return;
         }
 
-        // 순서 뽑기 단계 시작 - 1,2,3,4 카드 준비
-        const availableCards=shuffleArray([1,2,3,4].slice(0,players.length));
+        // 순서 뽑기 단계 시작 - 카드 번호는 랜덤 배치
+        const cardIds=Array.from({length:players.length},(_,i)=>i+1);
+        const cardNumbers=shuffleArray(cardIds.slice());
+        const cardValues=new Map(cardIds.map((id,idx)=>[id,cardNumbers[idx]]));
+        const availableCards=shuffleArray(cardIds.slice());
         orderPickingByRoom.set(info.roomId,{
-          cards:availableCards,
+          cardIds,
+          cardValues,
           picks:new Map(),
           players:players.map((p)=>({playerId:p.id,userId:p.userId}))
         });
@@ -379,37 +378,41 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         }
 
         // 유효한 카드인지 확인
-        const cardNum=Number(cardNumber);
-        if(!orderState.cards.includes(cardNum)){
+        const cardId=Number(cardNumber);
+        if(!orderState.cardIds.includes(cardId)){
           socket.emit("pick_error",{message:"유효하지 않은 카드입니다."});
           return;
         }
 
         // 이미 다른 사람이 선택한 카드인지 확인
         const pickedCards=Array.from(orderState.picks.values());
-        if(pickedCards.includes(cardNum)){
+        if(pickedCards.includes(cardId)){
           socket.emit("pick_error",{message:"이미 선택된 카드입니다."});
           return;
         }
 
         // 카드 선택 저장
-        orderState.picks.set(userId,cardNum);
-        console.log(`[Order Pick] User ${userId} picked card ${cardNum}`);
+        orderState.picks.set(userId,cardId);
+        const cardNumberValue=orderState.cardValues.get(cardId);
+        console.log(`[Order Pick] User ${userId} picked card ${cardId} => ${cardNumberValue}`);
 
         // 모든 클라이언트에게 선택 상황 알림
         io.to(info.roomId).emit("order_card_picked",{
           userId,
-          cardNumber:cardNum,
+          cardId,
+          cardNumber:cardNumberValue,
           pickedCards:Array.from(orderState.picks.values()),
-          remainingCards:orderState.cards.filter((c)=>!Array.from(orderState.picks.values()).includes(c))
+          remainingCards:orderState.cardIds.filter((c)=>!Array.from(orderState.picks.values()).includes(c))
         });
 
         // 모든 플레이어가 선택했는지 확인
         if(orderState.picks.size===orderState.players.length){
           // 순서 결정 및 게임 시작
           const sortedPlayers=[...orderState.players].sort((a,b)=>{
-            const aCard=orderState.picks.get(a.userId)||99;
-            const bCard=orderState.picks.get(b.userId)||99;
+            const aCardId=orderState.picks.get(a.userId);
+            const bCardId=orderState.picks.get(b.userId);
+            const aCard=orderState.cardValues.get(aCardId)||99;
+            const bCard=orderState.cardValues.get(bCardId)||99;
             return aCard-bCard;
           });
 
@@ -444,7 +447,7 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           const orderResults=sortedPlayers.map((p,idx)=>({
             userId:p.userId,
             playerId:p.playerId,
-            cardNumber:orderState.picks.get(p.userId),
+            cardNumber:orderState.cardValues.get(orderState.picks.get(p.userId))||0,
             turnOrder:idx+1,
             nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`
           }));
