@@ -52,6 +52,55 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
     gameLogic.warState.recoveryLine=1;
     gameLogic.warState.recoveryNode=1;
   }
+  async function syncLobbyPlayers(roomId){
+    const lobby=getLobbyState(roomId);
+    if(lobby.players.size>0)return lobby;
+    const players=await gameLogic.getLatestPlayersByUser(prisma,roomId);
+    if(players.length===0)return lobby;
+    const users=await prisma.user.findMany({where:{id:{in:players.map((p)=>p.userId)}},select:{id:true,nickname:true}});
+    const nicknameByUser=new Map(users.map((u)=>[u.id,u.nickname]));
+    players.forEach((p)=>{
+      lobby.players.set(p.userId,{
+        userId:p.userId,
+        nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`,
+        playerId:p.id,
+        character:p.character||null
+      });
+    });
+    if(!lobby.hostUserId&&players.length>0)lobby.hostUserId=players[0].userId;
+    return lobby;
+  }
+  async function buildResumePayload(roomId){
+    const players=await gameLogic.getLatestPlayersByUser(prisma,roomId);
+    const users=players.length?await prisma.user.findMany({where:{id:{in:players.map((p)=>p.userId)}},select:{id:true,nickname:true}}):[];
+    const nicknameByUser=new Map(users.map((u)=>[u.id,u.nickname]));
+    const playersPayload=players.map((p)=>({
+      playerId:p.id,
+      userId:p.userId,
+      nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`,
+      character:p.character||null,
+      location:typeof p.location==="number"?p.location:0,
+      cash:p.cash,
+      totalAsset:p.totalAsset
+    }));
+    const playerIdSet=new Set(playersPayload.map((p)=>p.playerId));
+    const storedOrder=gameLogic.roomTurnOrder.get(roomId);
+    const turnOrderPlayerIds=storedOrder?storedOrder.filter((id)=>playerIdSet.has(id)):playersPayload.map((p)=>p.playerId);
+    if(!storedOrder&&turnOrderPlayerIds.length)gameLogic.roomTurnOrder.set(roomId,turnOrderPlayerIds);
+    const playerIdToUser=new Map(playersPayload.map((p)=>[p.playerId,p.userId]));
+    const turnOrder=turnOrderPlayerIds.map((id)=>playerIdToUser.get(id)).filter((id)=>id!=null);
+    const turnPlayerId=await prisma.$transaction(async(tx)=>gameLogic.getTurnPlayerId(tx,roomId));
+    let currentTurn=gameLogic.currentTurnUserByRoom.get(roomId)||null;
+    if(!currentTurn&&turnPlayerId){
+      const turnPlayer=await prisma.player.findUnique({where:{id:turnPlayerId},select:{userId:true}});
+      currentTurn=turnPlayer?.userId||null;
+      if(currentTurn)gameLogic.currentTurnUserByRoom.set(roomId,currentTurn);
+    }
+    if(currentTurn&&!gameLogic.turnStateByRoom.get(roomId)){
+      gameLogic.turnStateByRoom.set(roomId,{userId:currentTurn,rolled:false,extraRoll:false});
+    }
+    return{turnPlayerId,currentTurn,turnOrder,turnOrderPlayerIds,players:playersPayload};
+  }
 
   io.on("connection",(socket)=>{
     console.log(`User connected: ${socket.id}`);
@@ -77,7 +126,7 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           console.log(`[join_room] Room ${roomId} is full (${lobbyState.players.size}/${MAX_PLAYERS})`);
           return;
         }
-        if(room.status!=="WAITING"&&lobbyState.players.size===0){
+        if(room.status==="ENDED"&&lobbyState.players.size===0){
           room=await prisma.room.update({where:{id:roomId},data:{status:"WAITING",turnPlayerIdx:0,currentTurn:1}});
           gameLogic.currentTurnUserByRoom.delete(roomId);
           gameLogic.roomTurnOrder.delete(roomId);
@@ -86,9 +135,13 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           gameLogic.turnStateByRoom.delete(roomId);
           resetWarState();
         }
-        if(room.status==="PLAYING"&&!gameLogic.roomTurnOrder.get(roomId)){
-          room=await prisma.room.update({where:{id:roomId},data:{status:"WAITING",turnPlayerIdx:0,currentTurn:1}});
-          resetWarState();
+        if(room.status==="PLAYING"){
+          await syncLobbyPlayers(roomId);
+          if(!gameLogic.roomTurnOrder.get(roomId)){
+            const latestPlayers=await gameLogic.getLatestPlayersByUser(prisma,roomId);
+            const fallbackOrder=latestPlayers.slice().sort((a,b)=>a.id-b.id).map((p)=>p.id);
+            if(fallbackOrder.length)gameLogic.roomTurnOrder.set(roomId,fallbackOrder);
+          }
         }
         const user=await prisma.user.findUnique({where:{id:sessionUserId}});
         let player=await prisma.player.findFirst({where:{roomId,userId:sessionUserId},orderBy:{id:"desc"},include:{assets:true}});
@@ -125,6 +178,10 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         socket.emit("war_state",gameLogic.getWarPayload());
         io.to(roomId).emit("lobby_update",lobbyPayload);
         await gameLogic.emitAssetUpdate(player.id);
+        if(room.status==="PLAYING"){
+          const resumePayload=await buildResumePayload(roomId);
+          socket.emit("game_start",resumePayload);
+        }
       }catch(e){
         socket.emit("join_error",{message:"Failed to join room"});
       }
@@ -300,7 +357,7 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         const userRecord=await prisma.user.findUnique({where:{id:userId},select:{nickname:true}});
         const userName=userRecord?.nickname||"Player";
         console.log(`[${userName}] moved ${result.oldLocation} -> ${result.newLocation}`);
-        socket.emit("dice_rolled",{userId,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,player:result.player,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
+        io.to(result.roomId).emit("dice_rolled",{userId,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,player:result.player,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
         io.to(result.roomId).emit("playerMove",{userId,playerId:result.player.id,character:result.player.character,oldLocation:result.oldLocation,newLocation:result.newLocation,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
         if(result.cardEvent){
           io.to(result.roomId).emit("drawCard",result.cardEvent);
