@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <radialGradient id="vignette" cx="50%" cy="45%" r="75%">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="65%" stop-color="#000000" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.85"/>
+    </radialGradient>
+    <radialGradient id="starsGlow" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#0b1630"/>
+      <stop offset="55%" stop-color="#050a18"/>
+      <stop offset="100%" stop-color="#02040b"/>
+    </radialGradient>
+    <radialGradient id="earthGlow" cx="40%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#a7f3fc" stop-opacity="0.95"/>
+      <stop offset="20%" stop-color="#34d399" stop-opacity="0.25"/>
+      <stop offset="45%" stop-color="#0284c7" stop-opacity="0.55"/>
+      <stop offset="70%" stop-color="#0f172a" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.98"/>
+    </radialGradient>
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="
+        1 0 0 0 0
+        0 1 0 0 0
+        0 0 1 0 0
+        0 0 0 0.75 0" result="blurAlpha"/>
+      <feMerge>
+        <feMergeNode in="blurAlpha"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#starsGlow)"/>
+
+  <!-- stars -->
+  <g fill="#ffffff" opacity="0.75">
+    <circle cx="120" cy="120" r="1.5"/>
+    <circle cx="320" cy="210" r="1.2"/>
+    <circle cx="520" cy="90" r="1.0"/>
+    <circle cx="760" cy="180" r="1.4"/>
+    <circle cx="940" cy="110" r="1.1"/>
+    <circle cx="1080" cy="210" r="1.3"/>
+    <circle cx="1320" cy="140" r="1.1"/>
+    <circle cx="1580" cy="220" r="1.5"/>
+    <circle cx="1760" cy="120" r="1.0"/>
+    <circle cx="220" cy="420" r="1.2"/>
+    <circle cx="420" cy="520" r="1.0"/>
+    <circle cx="680" cy="420" r="1.3"/>
+    <circle cx="880" cy="510" r="1.1"/>
+    <circle cx="1180" cy="430" r="1.2"/>
+    <circle cx="1460" cy="520" r="1.0"/>
+    <circle cx="1700" cy="440" r="1.3"/>
+    <circle cx="260" cy="780" r="1.0"/>
+    <circle cx="520" cy="860" r="1.2"/>
+    <circle cx="820" cy="770" r="1.0"/>
+    <circle cx="1020" cy="880" r="1.3"/>
+    <circle cx="1300" cy="810" r="1.1"/>
+    <circle cx="1560" cy="900" r="1.2"/>
+    <circle cx="1780" cy="760" r="1.0"/>
+  </g>
+
+  <!-- earth -->
+  <g filter="url(#softGlow)">
+    <circle cx="520" cy="740" r="420" fill="url(#earthGlow)"/>
+    <path d="M280,650 C360,610 420,610 490,640 C560,670 610,660 690,620 C720,605 760,605 810,630 C840,645 850,680 830,705 C800,745 720,780 650,790 C560,805 480,790 400,760 C340,737 300,707 270,680 C250,660 255,660 280,650Z" fill="#22c55e" opacity="0.18"/>
+    <path d="M370,840 C430,820 490,820 560,840 C620,858 690,852 740,830 C770,818 805,822 830,840 C855,858 865,890 850,915 C825,955 750,985 670,992 C580,1000 500,990 420,965 C360,946 320,918 300,890 C285,870 310,858 370,840Z" fill="#38bdf8" opacity="0.14"/>
+    <circle cx="520" cy="740" r="430" fill="#60a5fa" opacity="0.06"/>
+  </g>
+
+  <rect width="1920" height="1080" fill="url(#vignette)"/>
+</svg>
+
