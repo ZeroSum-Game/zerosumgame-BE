@@ -61,8 +61,8 @@ model Player {
   
   character  Character? // MUSK, LEE, TRUMP, PUTIN
   
-  cash       BigInt    @default(4000000)
-  totalAsset BigInt    @default(4000000) // 랭킹용
+  cash       BigInt    @default(3000000)
+  totalAsset BigInt    @default(3000000) // 랭킹용
   
   location   Int       @default(0) // 0 ~ 31
   isBankrupt Boolean   @default(false) // 파산 여부 (승리조건 1)
@@ -131,18 +131,18 @@ model Market {
   roomId         Int    @unique
 
   // 현재가
-  priceSamsung   BigInt @default(50000)
-  priceTesla     BigInt @default(300000)
-  priceLockheed  BigInt @default(100000) // 한화에어로 or 록히드
-  priceGold      BigInt @default(100000)
-  priceBtc       BigInt @default(50000000)
+  priceSamsung   BigInt @default(100000)
+  priceTesla     BigInt @default(500000)
+  priceLockheed  BigInt @default(800000) // 한화에어로 or 록히드
+  priceGold      BigInt @default(200000)
+  priceBtc       BigInt @default(5000000)
   
   // 이전 턴 가격 (등락폭 표시용)
-  prevSamsung    BigInt @default(50000)
-  prevTesla      BigInt @default(300000)
-  prevLockheed   BigInt @default(100000)
-  prevGold       BigInt @default(100000)
-  prevBtc        BigInt @default(50000000)
+  prevSamsung    BigInt @default(100000)
+  prevTesla      BigInt @default(500000)
+  prevLockheed   BigInt @default(800000)
+  prevGold       BigInt @default(200000)
+  prevBtc        BigInt @default(5000000)
 }
 
 // ------------------------------------------
