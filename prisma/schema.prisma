@@ -61,8 +61,8 @@ model Player {
   
   character  Character? // MUSK, LEE, TRUMP, PUTIN
   
-  cash       BigInt    @default(2000000)
-  totalAsset BigInt    @default(2000000) // 랭킹용
+  cash       BigInt    @default(4000000)
+  totalAsset BigInt    @default(4000000) // 랭킹용
   
   location   Int       @default(0) // 0 ~ 31
   isBankrupt Boolean   @default(false) // 파산 여부 (승리조건 1)

@@ -15,11 +15,25 @@ h1 { margin: 10px 0 16px; color: #333; }
 .status-bar { background: #fff; padding: 10px; border-radius: 8px; display: inline-block; margin-bottom: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
 .connection-status { color: #ff4757; font-weight: bold; }
 .connection-status.on { color: #2ed573; }
+.lobby-panel { background: #ffffff; border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.12); padding: 14px 16px; width: 320px; margin: 0 auto 16px; text-align: left; }
+.lobby-title { font-weight: 800; margin-bottom: 8px; }
+.lobby-list { margin: 0; padding-left: 16px; font-size: 12px; }
+.lobby-actions { display: flex; gap: 8px; margin-top: 8px; }
+.lobby-btn { padding: 8px 12px; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; }
+.lobby-ready { background: #00897b; color: #fff; }
+.lobby-start { background: #3949ab; color: #fff; }
+.lobby-note { margin-top: 6px; font-size: 11px; color: #666; }
 .action-area { margin: 16px 0 10px; }
-.roll-btn { padding: 12px 18px; font-size: 16px; border: none; border-radius: 8px; background: #222; color: #fff; cursor: pointer; }
+.roll-btn { padding: 12px 18px; font-size: 16px; border: none; border-radius: 8px; background: #222; color: #fff; cursor: pointer; display: inline-block; }
+.roll-btn:disabled { background: #888; cursor: not-allowed; opacity: 0.7; }
 .location-text { margin-top: 10px; font-weight: 700; }
 .board-container { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; max-width: 1000px; margin: 0 auto; background: #ddd; padding: 10px; border-radius: 10px; }
 .cell { border: 1px solid #ddd; padding: 10px 5px; border-radius: 5px; font-size: 12px; font-weight: bold; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 80px; background-color: #fff; position: relative; }
+.war-danger { background-color: #b71c1c; color: #fff; }
+.war-alert { background-color: #f57c00; color: #fff; }
+.war-safe { background-color: #2e7d32; color: #fff; }
+.war-pulse { animation: warPulse 1s ease-in-out infinite; }
+@keyframes warPulse { 0% { filter: brightness(1); } 50% { filter: brightness(1.4); } 100% { filter: brightness(1); } }
 .START { background-color: #ffeba7; }
 .LAND { background-color: #e3f2fd; }
 .STOCK { background-color: #ffe0b2; color: #e65100; }
@@ -31,6 +45,45 @@ h1 { margin: 10px 0 16px; color: #333; }
 .TAX { background-color: #ffccbc; }
 .price { font-size: 10px; color: #666; margin-top: 5px; }
 .idx { position: absolute; top: 2px; left: 5px; font-size: 8px; color: #aaa; }
+.inventory-panel { position: fixed; right: 16px; bottom: 16px; background: #ffffff; border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.12); padding: 12px 14px; width: 260px; text-align: left; font-size: 12px; }
+.inventory-title { font-weight: 800; margin-bottom: 6px; }
+.inventory-row { display: flex; justify-content: space-between; margin: 4px 0; }
+.inventory-list { margin: 6px 0 0; padding-left: 14px; }
+.inventory-list li { margin: 2px 0; }
+.card-toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #222; color: #fff; padding: 16px 22px; border-radius: 12px; box-shadow: 0 10px 24px rgba(0,0,0,0.25); opacity: 0; pointer-events: none; transition: opacity 0.2s ease; font-weight: 700; z-index: 999; }
+.card-toast { font-family: "Noto Sans KR", sans-serif; text-align: center; }
+.card-toast h3 { margin: 0 0 6px; font-size: 16px; }
+.card-toast p { margin: 0; font-size: 13px; line-height: 1.4; max-width: 240px; word-break: keep-all; white-space: normal; }
+.card-toast.show { opacity: 1; }
+.character-panel { display: inline-flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.character-select { padding: 6px 8px; border-radius: 6px; border: 1px solid #ddd; }
+.character-btn { padding: 8px 12px; border: none; border-radius: 6px; background: #5c6bc0; color: #fff; font-weight: 700; cursor: pointer; }
+.character-status { font-weight: 700; color: #444; }
+.player-token { position: absolute; right: 4px; bottom: 4px; display: flex; align-items: center; gap: 4px; background: rgba(255,255,255,0.92); border-radius: 10px; padding: 2px 4px; font-size: 9px; color: #333; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+.player-token img { width: 18px; height: 18px; border-radius: 50%; border: 1px solid #ddd; }
+.player-token.mine { outline: 2px solid #4f8ef7; }
+.land-action-panel { position: fixed; right: 16px; bottom: 500px; background: #ffffff; border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.12); padding: 12px 14px; width: 260px; text-align: left; font-size: 12px; display: none; }
+.land-action-title { font-weight: 800; margin-bottom: 6px; }
+.land-action-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.land-action-select { width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid #ddd; margin-bottom: 8px; display: none; }
+.land-action-btn { padding: 8px 10px; border: none; border-radius: 8px; color: #fff; font-weight: 700; cursor: pointer; }
+.land-buy { background: #1e88e5; }
+.land-takeover { background: #fb8c00; }
+.land-landmark { background: #43a047; }
+.land-sell { background: #757575; }
+.stock-buy-panel { position: fixed; right: 16px; bottom: 310px; background: #ffffff; border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.12); padding: 12px 14px; width: 260px; text-align: left; font-size: 12px; display: none; }
+.stock-buy-title { font-weight: 800; margin-bottom: 6px; }
+.stock-buy-row { display: flex; gap: 8px; align-items: center; }
+.stock-buy-input { width: 70px; padding: 6px 8px; border-radius: 6px; border: 1px solid #ddd; }
+.stock-buy-btn { padding: 8px 10px; border: none; border-radius: 8px; color: #fff; font-weight: 700; cursor: pointer; }
+.war-stock-box { margin-top: 8px; padding: 6px 8px; border-radius: 8px; background: #f5f5f5; font-size: 11px; }
+.war-stock-title { font-weight: 700; margin-bottom: 4px; }
+.stock-tesla { background: #d32f2f; }
+.stock-gold { background: #caa100; }
+.stock-lockheed { background: #546e7a; }
+.stock-samsung { background: #1565c0; }
+.stock-bitcoin { background: #f57c00; }
+@media (max-width: 768px) { .inventory-panel, .stock-buy-panel, .land-action-panel { position: static; width: auto; margin: 16px auto 0; } }
 </style>
 </head>
 <body>
@@ -39,15 +92,70 @@ h1 { margin: 10px 0 16px; color: #333; }
 <button class="login-btn" id="login-btn">구글 로그인</button>
 <button class="logout-btn" id="logout-btn">로그아웃</button>
 </div>
+<div class="character-panel" id="character-panel">
+<select class="character-select" id="character-select">
+<option value="">캐릭터 선택</option>
+<option value="MUSK">일론 머스크</option>
+<option value="LEE">이재용</option>
+<option value="TRUMP">트럼프</option>
+<option value="PUTIN">푸틴</option>
+</select>
+<button class="character-btn" id="character-btn">적용</button>
+<span class="character-status" id="character-status">미선택</span>
+</div>
 <div class="status-bar">
 상태: <span id="status" class="connection-status">연결 시도 중..</span> | ID: <span id="my-id">-</span> | 로그인: <span id="auth-status">확인 중..</span> | 잔액: <span id="cash-text">-</span>
 </div>
+<div class="lobby-panel" id="lobby-panel">
+<div class="lobby-title">대기실</div>
+<ul class="lobby-list" id="lobby-list"></ul>
+<div class="lobby-actions">
+<button class="lobby-btn lobby-ready" id="ready-btn">준비 완료</button>
+<button class="lobby-btn lobby-start" id="start-btn">게임 시작</button>
+</div>
+<div class="lobby-note" id="lobby-note">방장이 시작하면 게임이 시작됩니다.</div>
+</div>
 <div class="action-area">
 <button class="roll-btn" id="roll-btn">주사위 굴리기 🎲</button>
-<button class="roll-btn" id="purchase-btn" style="display:none;margin-left:8px;background:#e53935;">구매하기</button>
+<button class="roll-btn" id="end-turn-btn" style="background:#455a64; display:none;">턴 종료</button>
 <div class="location-text" id="location-text">현재 위치: -</div>
 </div>
 <div class="board-container" id="board">맵을 불러오는 중..</div>
+<div class="card-toast" id="card-toast"></div>
+<div class="land-action-panel" id="land-action-panel">
+<div class="land-action-title" id="land-action-title">부동산</div>
+<select class="land-action-select" id="land-action-select"></select>
+<div class="land-action-row">
+<button class="land-action-btn land-buy" id="land-buy-btn">구매하기</button>
+<button class="land-action-btn land-takeover" id="land-takeover-btn">인수하기</button>
+<button class="land-action-btn land-landmark" id="land-landmark-btn">랜드마크</button>
+<button class="land-action-btn land-sell" id="land-sell-btn">매도하기</button>
+</div>
+</div>
+<div class="stock-buy-panel" id="stock-buy-panel">
+<div class="stock-buy-title" id="stock-buy-title">주식 매수</div>
+<div class="stock-buy-row">
+<input class="stock-buy-input" id="stock-qty-input" type="number" min="1" value="1" />
+<button class="stock-buy-btn" id="stock-buy-btn">매수하기</button>
+<button class="stock-buy-btn" id="stock-sell-btn" style="background:#455a64;">매도하기</button>
+</div>
+<div class="war-stock-box" id="market-box"></div>
+<div class="war-stock-box">
+<div class="war-stock-title">전쟁 수혜주</div>
+<div>방산/금: 록히드마틴, 금</div>
+<div class="war-stock-title" style="margin-top:4px;">전쟁 피해주</div>
+<div>IT/제조: 삼성전자, 테슬라</div>
+</div>
+</div>
+<div class="inventory-panel" id="inventory-panel">
+<div class="inventory-title">내 자산</div>
+<div class="inventory-row"><span>총 자산</span><span id="total-asset-text">-</span></div>
+<div class="inventory-row"><span>현금</span><span id="inv-cash-text">-</span></div>
+<div class="inventory-row"><span>주식 합계</span><span id="inv-stock-total-text">-</span></div>
+<div class="inventory-row"><span>땅 합계</span><span id="inv-land-total-text">-</span></div>
+<div class="inventory-title" style="margin-top:8px;">보유 주식</div>
+<ul class="inventory-list" id="inv-stocks-list"></ul>
+</div>
 <script>
 const socket = io();
 const statusEl = document.getElementById("status");
@@ -57,47 +165,284 @@ const cashText = document.getElementById("cash-text");
 const loginBtn = document.getElementById("login-btn");
 const logoutBtn = document.getElementById("logout-btn");
 const rollBtn = document.getElementById("roll-btn");
-const purchaseBtn = document.getElementById("purchase-btn");
+const endTurnBtn = document.getElementById("end-turn-btn");
 const rollArea = document.querySelector(".action-area");
 const locationText = document.getElementById("location-text");
+const lobbyPanel = document.getElementById("lobby-panel");
+const lobbyList = document.getElementById("lobby-list");
+const readyBtn = document.getElementById("ready-btn");
+const startBtn = document.getElementById("start-btn");
+const lobbyNote = document.getElementById("lobby-note");
+const cardToast = document.getElementById("card-toast");
+const characterSelect = document.getElementById("character-select");
+const characterBtn = document.getElementById("character-btn");
+const characterStatus = document.getElementById("character-status");
+const landActionPanel = document.getElementById("land-action-panel");
+const landActionTitle = document.getElementById("land-action-title");
+const landActionSelect = document.getElementById("land-action-select");
+const landBuyBtn = document.getElementById("land-buy-btn");
+const landTakeoverBtn = document.getElementById("land-takeover-btn");
+const landLandmarkBtn = document.getElementById("land-landmark-btn");
+const landSellBtn = document.getElementById("land-sell-btn");
+const stockBuyPanel = document.getElementById("stock-buy-panel");
+const stockBuyTitle = document.getElementById("stock-buy-title");
+const stockQtyInput = document.getElementById("stock-qty-input");
+const stockBuyBtn = document.getElementById("stock-buy-btn");
+const stockSellBtn = document.getElementById("stock-sell-btn");
+const marketBox = document.getElementById("market-box");
+const totalAssetText = document.getElementById("total-asset-text");
+const invCashText = document.getElementById("inv-cash-text");
+const invStockTotalText = document.getElementById("inv-stock-total-text");
+const invLandTotalText = document.getElementById("inv-land-total-text");
+const invStocksList = document.getElementById("inv-stocks-list");
 const mapByIdx = new Map();
+const stockTileMap = { 4: "tesla", 9: "gold", 14: "lockheed", 18: "samsung", 25: "bitcoin" };
+const stockNames = { tesla: "테슬라", gold: "금", lockheed: "록히드마틴", samsung: "삼성전자", bitcoin: "비트코인" };
+const stockButtonClass = { tesla: "stock-tesla", gold: "stock-gold", lockheed: "stock-lockheed", samsung: "stock-samsung", bitcoin: "stock-bitcoin" };
+const characterImages = { MUSK: "/characters/musk.svg", LEE: "/characters/lee.svg", TRUMP: "/characters/trump.svg", PUTIN: "/characters/putin.svg" };
+const characterSkills = { MUSK: "+100만", LEE: "삼성주식 +10", TRUMP: "통행료 +5%", PUTIN: "전쟁승률 +10%" };
+let currentUserId = null;
+let currentPlayerId = null;
+let currentStockSymbol = null;
+let currentLocation = null;
+let currentTurnPlayerId = null;
+let currentTurnUserId = null;
+let currentWarState = null;
+let lastMarket = null;
+let currentLobby = null;
+let gameStarted = false;
+let currentCharacter = null;
+let actionWindowOpen = false;
+let lastHasExtraTurn = false;
+const landVisitCount = new Map();
+const landLastAction = new Map();
+let ownedLandNodes = [];
+const playerTokens = new Map();
+const playerCharacters = new Map();
+const playerLocations = new Map();
 loginBtn.addEventListener("click", () => { window.location.href = "/auth/google"; });
 logoutBtn.addEventListener("click", () => { window.location.href = "/api/auth/logout"; });
 rollBtn.addEventListener("click", () => { socket.emit("roll_dice"); });
-purchaseBtn.addEventListener("click", async () => {
+endTurnBtn.addEventListener("click", () => { socket.emit("end_turn"); });
+readyBtn.addEventListener("click", () => {
+if (!currentLobby) return;
+const me = currentLobby.players.find((p) => p.userId === currentUserId);
+const nextReady = !(me && me.ready);
+socket.emit("set_ready", { ready: nextReady });
+});
+startBtn.addEventListener("click", () => { socket.emit("start_game"); });
+characterBtn.addEventListener("click", async () => {
+const character = characterSelect.value;
+if (!character) { alert("캐릭터를 선택하세요"); return; }
 try {
-const response = await fetch("/api/game/purchase", { method: "POST" });
-if (!response.ok) { const err = await response.json().catch(() => ({})); alert(err.error || "구매 실패"); return; }
-const result = await response.json();
-if (typeof result.cash !== "undefined") cashText.innerText = `${Number(result.cash).toLocaleString()}원`;
-purchaseBtn.style.display = "none";
-} catch (e) { alert("구매 실패"); }
+const response = await fetch("/api/game/character", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ character }) });
+const result = await response.json().catch(() => ({}));
+if (!response.ok) { alert(result.error || "캐릭터 적용 실패"); return; }
+currentCharacter = result.character || currentCharacter;
+playerCharacters.set(currentPlayerId, currentCharacter);
+renderCharacterStatus(currentCharacter);
+placeToken(currentPlayerId, currentLocation, currentCharacter);
+await refreshAssets();
+} catch (e) { alert("캐릭터 적용 실패"); }
+});
+async function requestLandAction(action) {
+try {
+const payload = { action };
+if (currentLocation === 0 && landActionSelect.value) {
+payload.nodeIdx = Number(landActionSelect.value);
+}
+const response = await fetch("/api/game/purchase", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+const result = await response.json().catch(() => ({}));
+if (!response.ok) { alert(result.error || "부동산 처리 실패"); return; }
+const targetNodeIdx = Number.isInteger(result?.nodeIdx) ? result.nodeIdx : currentLocation;
+if (action === "BUY" || action === "TAKEOVER") {
+landVisitCount.set(targetNodeIdx, 0);
+landLastAction.set(targetNodeIdx, action);
+} else {
+landLastAction.set(targetNodeIdx, action);
+}
+await loadMap();
+await refreshAssets();
+} catch (e) { alert("부동산 처리 실패"); }
+}
+landBuyBtn.addEventListener("click", () => requestLandAction("BUY"));
+landTakeoverBtn.addEventListener("click", () => requestLandAction("TAKEOVER"));
+landLandmarkBtn.addEventListener("click", () => requestLandAction("LANDMARK"));
+landSellBtn.addEventListener("click", () => requestLandAction("SELL"));
+landActionSelect.addEventListener("change", () => updateUI(currentLocation));
+stockBuyBtn.addEventListener("click", async () => {
+if (!currentStockSymbol) return;
+const qty = Number(stockQtyInput.value);
+if (!Number.isInteger(qty) || qty <= 0) { alert("수량을 입력하세요"); return; }
+try {
+const response = await fetch("/api/game/stock", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: currentStockSymbol.toUpperCase(), quantity: qty, type: "BUY" }) });
+const result = await response.json().catch(() => ({}));
+if (!response.ok) { alert(result.error || "주식 구매 실패"); return; }
+await refreshAssets();
+} catch (e) { alert("주식 구매 실패"); }
+});
+stockSellBtn.addEventListener("click", async () => {
+if (!currentStockSymbol) return;
+const qty = Number(stockQtyInput.value);
+if (!Number.isInteger(qty) || qty <= 0) { alert("수량을 입력하세요"); return; }
+try {
+const response = await fetch("/api/game/stock", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: currentStockSymbol.toUpperCase(), quantity: qty, type: "SELL" }) });
+const result = await response.json().catch(() => ({}));
+if (!response.ok) { alert(result.error || "주식 매도 실패"); return; }
+await refreshAssets();
+} catch (e) { alert("주식 매도 실패"); }
 });
 socket.on("connect", () => {
 statusEl.innerText = "연결됨";
 statusEl.className = "connection-status on";
 idEl.innerText = socket.id;
+rollArea.style.display = "flex";
+rollArea.style.justifyContent = "center";
+rollArea.style.alignItems = "center";
+rollArea.style.gap = "10px";
 socket.emit("join_room", 1);
 });
 socket.on("disconnect", () => {
 statusEl.innerText = "연결 끊김";
 statusEl.className = "connection-status";
 });
+socket.on("join_success", (data) => {
+currentUserId = data?.player?.userId || null;
+currentPlayerId = data?.player?.id || null;
+currentCharacter = data?.player?.character || null;
+if (currentPlayerId) playerCharacters.set(currentPlayerId, currentCharacter);
+renderCharacterStatus(currentCharacter);
+currentTurnPlayerId = data?.turnPlayerId || null;
+currentTurnUserId = data?.currentTurn || null;
+gameStarted = data?.roomStatus === "PLAYING";
+updateLobbyUI(data?.lobby);
+setGameStarted(gameStarted);
+updateTurnUI();
+const idx = data?.player?.location;
+currentLocation = idx;
+updateUI(idx);
+placeToken(currentPlayerId, currentLocation, currentCharacter);
+refreshAssets();
+});
+socket.on("lobby_update", (data) => { updateLobbyUI(data); });
+socket.on("game_start", (data) => {
+gameStarted = true;
+setGameStarted(true);
+currentTurnPlayerId = data?.turnPlayerId || currentTurnPlayerId;
+currentTurnUserId = data?.currentTurn || currentTurnUserId;
+actionWindowOpen = false;
+lastHasExtraTurn = false;
+updateTurnUI();
+updateUI(currentLocation);
+console.log("My ID:", currentUserId, "Current Turn:", currentTurnUserId);
+const starter = (data?.players || []).find((p) => p.userId === currentTurnUserId);
+const starterName = starter?.nickname || "플레이어";
+showFirstTurnNotice(`${starterName}님의 첫 번째 차례입니다!`);
+if (Array.isArray(data?.players)) {
+data.players.forEach((p) => {
+playerCharacters.set(p.playerId, p.character || null);
+playerLocations.set(p.playerId, typeof p.location === "number" ? p.location : 0);
+placeToken(p.playerId, playerLocations.get(p.playerId), p.character);
+});
+}
+});
+socket.on("start_error", (data) => { alert(data?.message || "게임 시작 실패"); });
 socket.on("dice_rolled", (data) => {
 const dice1 = data?.dice1 ?? "?";
 const dice2 = data?.dice2 ?? "?";
 alert(`주사위: ${dice1}, ${dice2}`);
 const idx = data?.player?.location;
-if (typeof idx === "number" && mapByIdx.has(idx)) {
+if (data?.player?.id === currentPlayerId && typeof idx === "number" && mapByIdx.has(idx)) {
 const name = mapByIdx.get(idx)?.name || "-";
 locationText.innerText = `현재 위치: ${idx}번 ${name}`;
+currentLocation = idx;
+updateUI(idx);
 }
-const cash = data?.player?.cash;
-if (typeof cash !== "undefined") {
-cashText.innerText = `${Number(cash).toLocaleString()}원`;
-}
-updatePurchaseButton(idx);
+currentTurnPlayerId = data?.turnPlayerId || currentTurnPlayerId;
+currentTurnUserId = data?.turnUserId || currentTurnUserId;
+actionWindowOpen = data?.player?.id === currentPlayerId;
+lastHasExtraTurn = !!data?.hasExtraTurn;
+updateTurnUI();
+refreshAssets();
 });
+socket.on("playerMove", (data) => {
+const idx = data?.newLocation;
+if (data?.playerId && data?.character) {
+playerCharacters.set(data.playerId, data.character);
+}
+if (data?.playerId && typeof idx === "number") {
+placeToken(data.playerId, idx, playerCharacters.get(data.playerId));
+}
+if (data?.playerId === currentPlayerId && typeof idx === "number" && mapByIdx.has(idx)) {
+const name = mapByIdx.get(idx)?.name || "-";
+locationText.innerText = `현재 위치: ${idx}번 ${name}`;
+currentLocation = idx;
+const node = mapByIdx.get(idx);
+const land = node?.gameLands?.[0];
+if (node?.type === "LAND" && land?.ownerId === currentPlayerId) {
+landVisitCount.set(idx, (landVisitCount.get(idx) || 0) + 1);
+}
+updateUI(idx);
+actionWindowOpen = true;
+}
+currentTurnPlayerId = data?.turnPlayerId || currentTurnPlayerId;
+currentTurnUserId = data?.turnUserId || currentTurnUserId;
+updateTurnUI();
+refreshAssets();
+});
+socket.on("drawCard", (data) => {
+const title = data?.title || "황금열쇠";
+const description = data?.description || "";
+showCardToast(title, description);
+refreshAssets();
+});
+socket.on("turn_update", (data) => {
+currentTurnUserId = data?.currentTurn || currentTurnUserId;
+currentTurnPlayerId = data?.turnPlayerId || currentTurnPlayerId;
+actionWindowOpen = false;
+lastHasExtraTurn = false;
+updateTurnUI();
+updateUI(currentLocation);
+});
+socket.on("turn_error", (data) => { alert(data?.message || "턴 종료 실패"); });
+socket.on("game_end", (data) => {
+const rankings = data?.rankings || [];
+const text = rankings.map((r, i) => `${i + 1}위: ${r.nickname || "플레이어"} - ${Number(r.totalAsset).toLocaleString()}원`).join("\n");
+alert(`게임 종료!\n${text}`);
+gameStarted = false;
+actionWindowOpen = false;
+lastHasExtraTurn = false;
+setGameStarted(false);
+updateTurnUI();
+updateUI(currentLocation);
+});
+socket.on("asset_update", (data) => {
+if (!data || data.userId !== currentUserId) return;
+if (typeof data.cash !== "undefined") {
+cashText.innerText = `${Number(data.cash).toLocaleString()}원`;
+invCashText.innerText = `${Number(data.cash).toLocaleString()}원`;
+}
+if (typeof data.totalAsset !== "undefined") {
+totalAssetText.innerText = `${Number(data.totalAsset).toLocaleString()}원`;
+}
+refreshAssets();
+});
+socket.on("market_update", (data) => { lastMarket = data || null; updateMarketBox(); });
+socket.on("war_state", (data) => { currentWarState = data || null; applyWarColors(); });
+socket.on("war_start", (data) => { currentWarState = data || null; applyWarColors(); });
+socket.on("war_end", (data) => { currentWarState = data || null; applyWarColors(); });
+socket.on("character_update", (data) => {
+if (!data) return;
+if (data.playerId) {
+playerCharacters.set(data.playerId, data.character || null);
+placeToken(data.playerId, playerLocations.get(data.playerId), data.character);
+if (data.playerId === currentPlayerId) {
+currentCharacter = data.character || currentCharacter;
+renderCharacterStatus(currentCharacter);
+}
+}
+});
+socket.on("ready_error", (data) => { alert(data?.message || "직업을 선택해야 준비할 수 있습니다"); });
 socket.on("roll_error", (data) => { alert(data?.message || "주사위 오류"); });
 async function loadMap() {
 try {
@@ -109,10 +454,20 @@ mapData.forEach((node) => {
 mapByIdx.set(node.nodeIdx, node);
 const cell = document.createElement("div");
 cell.className = `cell ${node.type}`;
+cell.dataset.nodeIdx = node.nodeIdx;
+cell.dataset.lineIdx = getLineIndex(node.nodeIdx);
 const priceText = node.basePrice > 0 ? `<div class="price">₩${Number(node.basePrice).toLocaleString()}</div>` : "";
 cell.innerHTML = `<span class="idx">${node.nodeIdx}</span><span>${node.name}</span>${priceText}`;
 boardDiv.appendChild(cell);
 });
+playerLocations.forEach((loc, playerId) => {
+placeToken(playerId, loc, playerCharacters.get(playerId));
+});
+refreshAssets();
+if (typeof currentLocation === "number") {
+updateUI(currentLocation);
+}
+applyWarColors();
 } catch (error) {
 console.error("맵 로딩 실패:", error);
 document.getElementById("board").innerText = "맵 데이터를 불러오지 못했습니다.";
@@ -124,9 +479,19 @@ const response = await fetch("/api/me");
 if (response.ok) {
 authStatusEl.innerText = "로그인됨";
 const user = await response.json();
-const playerCash = user?.players?.[0]?.cash;
+currentUserId = user?.userId || currentUserId;
+currentPlayerId = user?.playerId || currentPlayerId;
+const playerCash = user?.cash;
 if (typeof playerCash !== "undefined") {
 cashText.innerText = `${Number(playerCash).toLocaleString()}원`;
+}
+if (typeof user?.totalAsset !== "undefined") {
+totalAssetText.innerText = `${Number(user.totalAsset).toLocaleString()}원`;
+}
+if (user?.character) {
+currentCharacter = user.character;
+playerCharacters.set(currentPlayerId, currentCharacter);
+renderCharacterStatus(currentCharacter);
 }
 return;
 }
@@ -137,24 +502,227 @@ authStatusEl.innerText = "로그인 필요";
 cashText.innerText = "-";
 }
 }
+function showCardToast(title, description = "") {
+const titleEl = document.createElement("h3");
+titleEl.textContent = title || "";
+const descEl = document.createElement("p");
+descEl.textContent = description || "";
+cardToast.innerHTML = "";
+cardToast.appendChild(titleEl);
+cardToast.appendChild(descEl);
+cardToast.classList.add("show");
+setTimeout(() => { cardToast.classList.remove("show"); }, 1800);
+}
+async function refreshAssets() {
+if (!currentUserId) return;
+try {
+const response = await fetch(`/api/players/${currentUserId}/assets`);
+if (!response.ok) return;
+const data = await response.json();
+totalAssetText.innerText = `${Number(data.totalAsset).toLocaleString()}원`;
+invCashText.innerText = `${Number(data.cash).toLocaleString()}원`;
+invStockTotalText.innerText = `${Number(data.stockTotal).toLocaleString()}원`;
+invLandTotalText.innerText = `${Number(data.landTotal).toLocaleString()}원`;
+const assets = data.assets || {};
+const stockItems = [
+{ name: "삼성전자", key: "samsung" },
+{ name: "테슬라", key: "tesla" },
+{ name: "록히드마틴", key: "lockheed" },
+{ name: "금", key: "gold" },
+{ name: "비트코인", key: "bitcoin" }
+].map((item) => `<li>${item.name}: ${assets[item.key] || 0}주</li>`).join("");
+invStocksList.innerHTML = stockItems || "<li>없음</li>";
+ownedLandNodes = data.lands || [];
+updateLandSelectOptions();
+} catch (e) {}
+}
+function updateLandSelectOptions() {
+if (!ownedLandNodes.length) { landActionSelect.style.display = "none"; landActionSelect.innerHTML = ""; return; }
+landActionSelect.innerHTML = ownedLandNodes.map((land) => {
+const node = mapByIdx.get(land.nodeIdx);
+const label = `${land.nodeIdx}번 ${node?.name || "토지"}`;
+return `<option value="${land.nodeIdx}">${label}</option>`;
+}).join("");
+landActionSelect.style.display = "block";
+}
 function updatePurchaseButton(idx) {
-if (typeof idx !== "number") { purchaseBtn.style.display = "none"; return; }
-if (authStatusEl.innerText !== "로그인됨") { purchaseBtn.style.display = "none"; return; }
+if (typeof idx !== "number") { landActionPanel.style.display = "none"; return; }
+if (authStatusEl.innerText !== "로그인됨") { landActionPanel.style.display = "none"; return; }
+const isMyTurn = currentTurnUserId && currentUserId && currentTurnUserId === currentUserId;
+if (!isMyTurn || !actionWindowOpen) { landActionPanel.style.display = "none"; return; }
 const node = mapByIdx.get(idx);
+if (!node) { landActionPanel.style.display = "none"; return; }
+landTakeoverBtn.style.display = "none";
+landActionSelect.style.display = "none";
+if (idx === 0) {
+landActionTitle.innerText = "원격 부동산";
+if (!ownedLandNodes.length) { landActionPanel.style.display = "none"; return; }
+updateLandSelectOptions();
+const targetIdx = Number(landActionSelect.value || ownedLandNodes[0]?.nodeIdx);
+const visitCount = landVisitCount.get(targetIdx) || 0;
+const lastAction = landLastAction.get(targetIdx) || null;
+const canUpgrade = visitCount > 0 && lastAction !== "BUY" && lastAction !== "TAKEOVER";
+landBuyBtn.style.display = "none";
+landLandmarkBtn.style.display = canUpgrade ? "inline-block" : "none";
+landSellBtn.style.display = canUpgrade ? "inline-block" : "none";
+landActionPanel.style.display = canUpgrade ? "block" : "block";
+return;
+}
+if (node.type !== "LAND") { landActionPanel.style.display = "none"; return; }
 const land = node?.gameLands?.[0];
-const canBuy = node?.type === "LAND" && !land?.ownerId;
-purchaseBtn.style.display = canBuy ? "inline-block" : "none";
-purchaseBtn.style.marginLeft = "8px";
-purchaseBtn.style.fontSize = "18px";
-purchaseBtn.style.padding = "14px 22px";
-purchaseBtn.style.background = "#e53935";
-purchaseBtn.style.color = "#fff";
-purchaseBtn.style.borderRadius = "10px";
-purchaseBtn.style.fontWeight = "800";
+const isMine = land?.ownerId && land.ownerId === currentPlayerId;
+const isOwned = land?.ownerId;
+const isLandmark = land?.isLandmark;
+const visitCount = landVisitCount.get(idx) || 0;
+const lastAction = landLastAction.get(idx) || null;
+const canUpgrade = visitCount > 0 && lastAction !== "BUY" && lastAction !== "TAKEOVER";
+landBuyBtn.style.display = !isOwned ? "inline-block" : "none";
+landLandmarkBtn.style.display = isMine && !isLandmark && canUpgrade ? "inline-block" : "none";
+landSellBtn.style.display = isMine && canUpgrade ? "inline-block" : "none";
+landTakeoverBtn.style.display = !isMine && isOwned && !isLandmark ? "inline-block" : "none";
+landActionTitle.innerText = node?.name ? `${node.name} 부동산` : "부동산";
+const hasAction = [landBuyBtn, landLandmarkBtn, landSellBtn, landTakeoverBtn].some((btn) => btn.style.display !== "none");
+landActionPanel.style.display = hasAction ? "block" : "none";
 rollArea.style.display = "flex";
 rollArea.style.justifyContent = "center";
 rollArea.style.alignItems = "center";
 rollArea.style.gap = "10px";
+}
+function updateUI(idx) {
+if (!gameStarted) { landActionPanel.style.display = "none"; stockBuyPanel.style.display = "none"; return; }
+updateTurnUI();
+updatePurchaseButton(idx);
+const symbol = stockTileMap[idx];
+const isMyTurn = currentTurnUserId && currentUserId && currentTurnUserId === currentUserId;
+if (!symbol || authStatusEl.innerText !== "로그인됨" || !isMyTurn || !actionWindowOpen) {
+stockBuyPanel.style.display = "none";
+currentStockSymbol = null;
+return;
+}
+currentStockSymbol = symbol;
+stockBuyPanel.style.display = "block";
+stockBuyTitle.innerText = `${stockNames[symbol]} 매수`;
+stockBuyBtn.className = `stock-buy-btn ${stockButtonClass[symbol]}`;
+}
+function updateTurnUI() {
+const isMyTurn = currentTurnUserId && currentUserId && currentTurnUserId === currentUserId;
+const canRoll = isMyTurn && (!actionWindowOpen || lastHasExtraTurn);
+rollBtn.disabled = !gameStarted || !canRoll;
+rollBtn.style.display = gameStarted && isMyTurn ? "block" : "none";
+endTurnBtn.disabled = !gameStarted || !isMyTurn || !actionWindowOpen || lastHasExtraTurn;
+endTurnBtn.style.display = gameStarted && isMyTurn ? "block" : "none";
+}
+function showFirstTurnNotice(message) {
+cardToast.innerText = message;
+cardToast.classList.add("show");
+setTimeout(() => { cardToast.classList.remove("show"); }, 2000);
+}
+function renderCharacterStatus(character) {
+const label = character || "미선택";
+const skill = characterSkills[character];
+characterStatus.innerText = skill ? `${label} (${skill})` : label;
+}
+function getTokenLabel(character) {
+if (!character) return "P";
+return character === "MUSK" ? "M" : character === "LEE" ? "L" : character === "TRUMP" ? "T" : "P";
+}
+function getTokenImage(character) {
+return characterImages[character] || "";
+}
+function placeToken(playerId, location, character) {
+if (!playerId || typeof location !== "number") return;
+const cell = document.querySelector(`.cell[data-node-idx="${location}"]`);
+if (!cell) return;
+playerLocations.set(playerId, location);
+let token = playerTokens.get(playerId);
+if (!token) {
+token = document.createElement("div");
+token.className = `player-token${playerId === currentPlayerId ? " mine" : ""}`;
+const img = document.createElement("img");
+img.alt = "character";
+const label = document.createElement("span");
+label.innerText = getTokenLabel(character);
+token.appendChild(img);
+token.appendChild(label);
+playerTokens.set(playerId, token);
+}
+const imgEl = token.querySelector("img");
+const labelEl = token.querySelector("span");
+const src = getTokenImage(character);
+if (imgEl) { imgEl.src = src || ""; imgEl.style.display = src ? "block" : "none"; }
+if (labelEl) labelEl.innerText = getTokenLabel(character);
+const skill = characterSkills[character] || "";
+token.title = skill ? `${character} ${skill}` : character || "";
+if (token.parentElement && token.parentElement !== cell) token.parentElement.removeChild(token);
+cell.appendChild(token);
+}
+function updateLobbyUI(lobby) {
+if (!lobby) return;
+currentLobby = lobby;
+const players = lobby.players || [];
+players.forEach((p) => {
+if (p.playerId) playerCharacters.set(p.playerId, p.character || null);
+});
+const me = players.find((p) => p.userId === currentUserId);
+const isHost = lobby.hostUserId && lobby.hostUserId === currentUserId;
+readyBtn.style.display = isHost ? "none" : "inline-block";
+startBtn.style.display = isHost ? "inline-block" : "none";
+startBtn.disabled = !lobby.allReady;
+readyBtn.innerText = me && me.ready ? "준비 취소" : "준비 완료";
+lobbyList.innerHTML = players.map((p) => {
+const hostTag = p.isHost ? " (방장)" : "";
+const readyTag = p.isHost ? "" : p.ready ? " ✅" : " ⏳";
+return `<li>${p.nickname}${hostTag}${readyTag}</li>`;
+}).join("") || "<li>참가자 없음</li>";
+lobbyNote.innerText = lobby.allReady ? "모두 준비 완료. 방장이 시작할 수 있어요." : "모든 참가자가 준비 완료여야 시작됩니다.";
+}
+function setGameStarted(started) {
+if (started) { lobbyPanel.style.display = "none"; return; }
+lobbyPanel.style.display = "block";
+}
+function getLineIndex(nodeIdx) {
+if (nodeIdx >= 0 && nodeIdx <= 7) return 0;
+if (nodeIdx >= 8 && nodeIdx <= 15) return 1;
+if (nodeIdx >= 16 && nodeIdx <= 23) return 2;
+if (nodeIdx >= 24 && nodeIdx <= 31) return 3;
+return -1;
+}
+function getAdjacentLines(lineIdx) {
+const adjacent = [];
+if (lineIdx > 0) adjacent.push(lineIdx - 1);
+if (lineIdx < 3) adjacent.push(lineIdx + 1);
+return adjacent;
+}
+function applyWarColors() {
+const cells = document.querySelectorAll(".cell");
+cells.forEach((cell) => {
+cell.classList.remove("war-danger","war-alert","war-safe","war-pulse");
+});
+if (!currentWarState || !currentWarState.active) return;
+const warLine = currentWarState.warLine;
+const adjacent = getAdjacentLines(warLine);
+cells.forEach((cell) => {
+const lineIdx = Number(cell.dataset.lineIdx);
+if (lineIdx === warLine) cell.classList.add("war-danger","war-pulse");
+else if (adjacent.includes(lineIdx)) cell.classList.add("war-alert");
+else if (lineIdx >= 0) cell.classList.add("war-safe");
+});
+}
+function updateMarketBox() {
+if (!lastMarket) { marketBox.innerText = "시세 불러오는 중.."; return; }
+const rows = [
+{ key: "samsung", label: "삼성전자", prev: "prevSamsung" },
+{ key: "tesla", label: "테슬라", prev: "prevTesla" },
+{ key: "lockheed", label: "록히드마틴", prev: "prevLockheed" },
+{ key: "gold", label: "금", prev: "prevGold" },
+{ key: "bitcoin", label: "비트코인", prev: "prevBtc" }
+];
+marketBox.innerHTML = rows.map((row) => {
+const price = Number(lastMarket[row.key]);
+const prev = Number(lastMarket[row.prev]);
+const icon = prev && price ? (price > prev ? "🚀" : price < prev ? "📉" : "⏸️") : "⏸️";
+return `<div>${row.label}: ${price ? price.toLocaleString() : "-"} ${icon}</div>`;
+}).join("");
 }
 loadMap();
 checkAuth();
