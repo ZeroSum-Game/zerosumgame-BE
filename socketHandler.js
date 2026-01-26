@@ -428,7 +428,7 @@
         gameLogic.turnStateByRoom.set(info.roomId,{userId:currentTurn,rolled:false,extraRoll:false});
 
         await prisma.$transaction(async(tx)=>{
-          await tx.room.update({where:{id:roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1,maxTurn:10}});
+          await tx.room.update({where:{id:roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1,maxTurn:20}});
           await market.resetMarketDefaults(tx,roomId);
         });
 
