@@ -32,8 +32,9 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
       ready:lobby.readyUserIds.has(p.userId),
       isHost:lobby.hostUserId===p.userId
     }));
-    // 모든 플레이어(방장 포함)가 준비되었는지 체크
-    const allReady=players.length>0&&players.every((p)=>p.ready);
+    const MIN_PLAYERS=2;
+    // 모든 플레이어(방장 포함)가 준비되었는지 체크 (최소 인원 이상)
+    const allReady=players.length>=MIN_PLAYERS&&players.every((p)=>p.ready);
     return{hostUserId:lobby.hostUserId,players,allReady};
   }
 
@@ -329,6 +330,11 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         const activeUserIds=new Set(lobbyPlayers?Array.from(lobbyPlayers.keys()):[]);
         const allPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
         const players=activeUserIds.size?allPlayers.filter((p)=>activeUserIds.has(p.userId)):allPlayers;
+        const MIN_PLAYERS=2;
+        if(players.length<MIN_PLAYERS){
+          socket.emit("start_error",{message:"At least 2 players are required"});
+          return;
+        }
         if(players.length===0){
           socket.emit("start_error",{message:"No players"});
           return;
