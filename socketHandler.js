@@ -90,7 +90,7 @@
   }
 
   async function buildResumePayload(roomId){
-    const players=await getActivePlayersByUser(roomId);
+    const players=await gameLogic.getLatestPlayersByUser(prisma,roomId);
     const users=players.length?await prisma.user.findMany({where:{id:{in:players.map((p)=>p.userId)}},select:{id:true,nickname:true}}):[];
     const nicknameByUser=new Map(users.map((u)=>[u.id,u.nickname]));
     const playersPayload=players.map((p)=>({
@@ -119,7 +119,7 @@
     if(currentTurn&&!gameLogic.turnStateByRoom.get(roomId)){
       gameLogic.turnStateByRoom.set(roomId,{userId:currentTurn,rolled:false,extraRoll:false});
     }
-    return{turnPlayerId,currentTurn,turnOrder,turnOrderPlayerIds,players:playersPayload};
+    return{resume:true,turnPlayerId,currentTurn,turnOrder,turnOrderPlayerIds,players:playersPayload};
   }
 
   async function ensureCurrentTurnUser(roomId){
@@ -279,7 +279,9 @@
           return;
         }
         if(room.status==="PLAYING"){
-          socket.emit("start_error",{message:"Game already started"});
+          await ensureCurrentTurnUser(roomId);
+          const resumePayload=await buildResumePayload(roomId);
+          socket.emit("game_start",resumePayload);
           return;
         }
         if(orderPickingByRoom.has(roomId)){
