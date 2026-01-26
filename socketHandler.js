@@ -4,6 +4,17 @@
   const orderPickingByRoom=new Map();
   const rollingUserByRoom=new Map();
 
+  function shuffleArray(items){
+    const arr=items.slice();
+    for(let i=arr.length-1;i>0;i-=1){
+      const j=Math.floor(Math.random()*(i+1));
+      const temp=arr[i];
+      arr[i]=arr[j];
+      arr[j]=temp;
+    }
+    return arr;
+  }
+
   io.use((socket,next)=>{
     try{
       const token=socket.handshake.auth?.token;
@@ -301,7 +312,7 @@
         });
         const lobbyPayload=buildLobbyPayload(roomId);
         const MIN_PLAYERS=2;
-        if(players.length<MIN_PLAYERS){
+        if(activePlayers.length<MIN_PLAYERS){
           socket.emit("start_error",{message:"At least 2 players are required"});
           return;
         }
@@ -315,13 +326,14 @@
         }
 
         // 순서 뽑기 단계 시작 - 카드 번호는 랜덤 배치
-        const cardIds=Array.from({length:players.length},(_,i)=>i+1);
+        const cardIds=Array.from({length:activePlayers.length},(_,i)=>i+1);
         const cardNumbers=shuffleArray(cardIds.slice());
         const cardValues=new Map(cardIds.map((id,idx)=>[id,cardNumbers[idx]]));
         const availableCards=shuffleArray(cardIds.slice());
         orderPickingByRoom.set(info.roomId,{
           cardIds,
           cardValues,
+          availableCards,
           picks:new Map(),
           players:activePlayers.map((p)=>({
             userId:p.userId,
@@ -344,23 +356,24 @@
           return;
         }
         const roomId=info.roomId;
+        const userId=info.userId;
         const orderState=orderPickingByRoom.get(roomId);
         if(!orderState){
           socket.emit("pick_error",{message:"Order picking not active"});
           return;
         }
-        const pick=Number(cardNumber);
-        if(!Number.isInteger(pick)){
+        const cardId=Number(cardNumber);
+        if(!Number.isInteger(cardId)){
           socket.emit("pick_error",{message:"Invalid card"});
           return;
         }
-        if(!orderState.availableCards.includes(pick)){
+        const availableCards=orderState.availableCards||orderState.cardIds;
+        if(!availableCards.includes(cardId)){
           socket.emit("pick_error",{message:"Invalid card"});
           return;
         }
 
         // 유효한 카드인지 확인
-        const cardId=Number(cardNumber);
         if(!orderState.cardIds.includes(cardId)){
           socket.emit("pick_error",{message:"유효하지 않은 카드입니다."});
           return;
@@ -402,19 +415,21 @@
           const orderUserIds=sortedPlayers.map((p)=>p.userId);
 
           gameLogic.roomTurnOrder.set(info.roomId,orderPlayerIds);
-          const currentTurn=orderUserIds[0]||null;
-          gameLogic.currentTurnUserByRoom.set(info.roomId,currentTurn);
-          market.clearTradeLock(info.roomId);
-          gameLogic.actionWindowByRoom.delete(info.roomId);
-          gameLogic.turnStateByRoom.set(info.roomId,{userId:currentTurn,rolled:false,extraRoll:false});
+        const currentTurn=orderUserIds[0]||null;
+        gameLogic.currentTurnUserByRoom.set(info.roomId,currentTurn);
+        market.clearTradeLock(info.roomId);
+        gameLogic.actionWindowByRoom.delete(info.roomId);
+        gameLogic.turnStateByRoom.set(info.roomId,{userId:currentTurn,rolled:false,extraRoll:false});
 
-          await prisma.room.update({where:{id:info.roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1}});
-          await prisma.$transaction(async(tx)=>market.resetMarketDefaults(tx,info.roomId));
+        await prisma.$transaction(async(tx)=>{
+          await tx.room.update({where:{id:roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1,maxTurn:10}});
+          await market.resetMarketDefaults(tx,roomId);
+        });
 
-          const lobbyInfo=buildLobbyPayload(info.roomId);
-          const nicknameByUser=new Map(lobbyInfo.players.map((p)=>[p.userId,p.nickname]));
-          const allPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
-          const activeUserIds=new Set(lobbyInfo.players.map((p)=>p.userId));
+        const lobbyInfo=buildLobbyPayload(info.roomId);
+        const nicknameByUser=new Map(lobbyInfo.players.map((p)=>[p.userId,p.nickname]));
+        const allPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
+        const activeUserIds=new Set(lobbyInfo.players.map((p)=>p.userId));
           const players=allPlayers.filter((p)=>activeUserIds.has(p.userId));
 
           const playersPayload=players.map((p)=>({
@@ -433,18 +448,6 @@
             turnOrder:idx+1,
             nickname:p.nickname
           }));
-          const turnOrderPlayerIds=ordered.map((p)=>p.playerId);
-          gameLogic.roomTurnOrder.set(roomId,turnOrderPlayerIds);
-          const firstUserId=ordered[0]?.userId||null;
-          if(firstUserId)gameLogic.currentTurnUserByRoom.set(roomId,firstUserId);
-          if(firstUserId)gameLogic.turnStateByRoom.set(roomId,{userId:firstUserId,rolled:false,extraRoll:false});
-          gameLogic.actionWindowByRoom.delete(roomId);
-          market.clearTradeLock(roomId);
-
-          await prisma.$transaction(async(tx)=>{
-            await tx.room.update({where:{id:roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1,maxTurn:10}});
-            await market.resetMarketDefaults(tx,roomId);
-          });
 
           io.to(roomId).emit("order_picking_complete",{orderResults});
           orderPickingByRoom.delete(roomId);
@@ -452,7 +455,7 @@
           setTimeout(()=>{
             void (async()=>{
               try{
-                const payload=await buildStartPayload(roomId,turnOrderPlayerIds);
+                const payload=await buildStartPayload(roomId,orderPlayerIds);
                 io.to(roomId).emit("game_start",payload);
                 io.to(roomId).emit("lobby_update",buildLobbyPayload(roomId));
               }catch(err){
