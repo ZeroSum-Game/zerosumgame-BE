@@ -174,8 +174,10 @@
           socket.emit("join_error",{message:`Room is full (${MAX_PLAYERS} max)`});
           return;
         }
-        if(room.status==="ENDED"&&lobbyState.players.size===0){
+        if((room.status==="ENDED"||room.status==="PLAYING")&&lobbyState.players.size===0){
           room=await prisma.room.update({where:{id:resolvedRoomId},data:{status:"WAITING",turnPlayerIdx:0,currentTurn:1}});
+          await prisma.gameLand.deleteMany({where:{roomId:resolvedRoomId}});
+          await prisma.player.deleteMany({where:{roomId:resolvedRoomId}});
           gameLogic.currentTurnUserByRoom.delete(resolvedRoomId);
           gameLogic.roomTurnOrder.delete(resolvedRoomId);
           gameLogic.actionWindowByRoom.delete(resolvedRoomId);
