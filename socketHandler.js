@@ -204,6 +204,9 @@
         if(room.status==="WAITING"&&player.character){
           player=await prisma.player.update({where:{id:player.id},data:{character:null},include:{assets:true}});
         }
+        if(room.status==="WAITING"){
+          lobbyState.readyUserIds.delete(sessionUserId);
+        }
         if(room.status==="PLAYING"){
           await syncLobbyPlayers(resolvedRoomId);
           if(!gameLogic.roomTurnOrder.get(resolvedRoomId)){
@@ -562,12 +565,18 @@
         market.clearTradeLock(info.roomId);
         await prisma.player.updateMany({where:{roomId:info.roomId,userId},data:{extraTurnUsed:false}});
 
+        const lobbyPlayersSnapshot=Array.from(getLobbyState(info.roomId).players.values());
+        const lobbyUserByPlayerId=new Map(lobbyPlayersSnapshot.map((p)=>[p.playerId,p.userId]));
+
         const turnResult=await prisma.$transaction(async(tx)=>{
           const room=await tx.room.findUnique({where:{id:info.roomId}});
           if(!room)throw new Error("Room not found");
           const allPlayers=await gameLogic.getLatestPlayersByUser(tx,info.roomId);
           const activePlayers=allPlayers.filter((p)=>isActiveSocketId(p.socketId));
-          const players=activePlayers.length?activePlayers:allPlayers;
+          let players=activePlayers.length?activePlayers:allPlayers;
+          if(players.length===0&&lobbyPlayersSnapshot.length){
+            players=lobbyPlayersSnapshot.map((p)=>({id:p.playerId,userId:p.userId}));
+          }
           if(players.length===0)throw new Error("No players in room");
           let turnOrder=gameLogic.roomTurnOrder.get(info.roomId);
           const playerIds=players.map((p)=>p.id);
@@ -590,7 +599,8 @@
           await tx.room.update({where:{id:info.roomId},data:updateData});
           const nextPlayerId=turnOrder[nextIndex];
           const nextPlayer=await tx.player.findUnique({where:{id:nextPlayerId},select:{userId:true}});
-          return{room,turnOrder,nextIndex,wrapped,nextTurn,reachedEnd,nextPlayerId,nextUserId:nextPlayer?.userId||null};
+          const fallbackUserId=lobbyUserByPlayerId.get(nextPlayerId)||null;
+          return{room,turnOrder,nextIndex,wrapped,nextTurn,reachedEnd,nextPlayerId,nextUserId:nextPlayer?.userId||fallbackUserId};
         });
 
         let warEnded=false;
