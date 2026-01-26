@@ -532,6 +532,34 @@
       }
     });
 
+    socket.on("draw_card",async(payload)=>{
+      try{
+        const info=socketUserMap.get(socket.id);
+        if(!info){
+          socket.emit("draw_error",{message:"Room not joined"});
+          return;
+        }
+        const player=await prisma.player.findFirst({where:{userId:info.userId,roomId:info.roomId},orderBy:{id:"desc"}});
+        if(!player){
+          socket.emit("draw_error",{message:"Player not found"});
+          return;
+        }
+        const node=await prisma.mapNode.findUnique({where:{nodeIdx:player.location}});
+        if(!node||node.type!=="KEY"){
+          socket.emit("draw_error",{message:"Not on key tile"});
+          return;
+        }
+        const card=payload?.card;
+        if(!card||card.id==null||!card.title){
+          socket.emit("draw_error",{message:"Invalid card"});
+          return;
+        }
+        io.to(info.roomId).emit("drawCard",{...card,userId:info.userId,playerId:player.id});
+      }catch(err){
+        socket.emit("draw_error",{message:"Failed to draw card"});
+      }
+    });
+
     socket.on("end_turn",async()=>{
       try{
         const userId=socket.user?.id;
