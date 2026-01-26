@@ -79,7 +79,8 @@
   }
 
   async function buildResumePayload(roomId){
-    const players=await getActivePlayersByUser(roomId);
+    const activePlayers=await getActivePlayersByUser(roomId);
+    const players=activePlayers.length?activePlayers:await gameLogic.getLatestPlayersByUser(prisma,roomId);
     const users=players.length?await prisma.user.findMany({where:{id:{in:players.map((p)=>p.userId)}},select:{id:true,nickname:true}}):[];
     const nicknameByUser=new Map(users.map((u)=>[u.id,u.nickname]));
     const playersPayload=players.map((p)=>({
