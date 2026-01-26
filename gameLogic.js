@@ -726,13 +726,25 @@ function createGameLogic({ prisma, io, market }) {
 
     router.post("/api/game/character", requireAuth, async (req, res) => {
       try {
-        const character = String(req.body?.character || "").toUpperCase();
-        if (!CHARACTER_LABEL[character]) return res.status(400).json({ error: "Invalid character" });
+        const rawCharacter = req.body?.character;
         const result = await prisma.$transaction(async (tx) => {
           const player = await tx.player.findFirst({ where: { userId: req.user.id }, orderBy: { id: "desc" }, include: { assets: true, room: true } });
           if (!player) throw new Error("Player not found");
           if (player.room?.status !== "WAITING") throw new Error("Game already started");
-          
+
+          if (!rawCharacter) {
+            let assets = player.assets || await tx.playerAsset.create({ data: { playerId: player.id } });
+            assets = await tx.playerAsset.update({ where: { playerId: player.id }, data: { samsung: 0, tesla: 0, lockheed: 0, gold: 0, bitcoin: 0 } });
+            const updated = await tx.player.update({
+              where: { id: player.id },
+              data: { character: null, cash: INITIAL_CASH, totalAsset: INITIAL_CASH, location: 0, extraTurnUsed: false }
+            });
+            return { playerId: player.id, character: updated.character, cash: updated.cash, roomId: player.roomId, userId: player.userId };
+          }
+
+          const character = String(rawCharacter || "").toUpperCase();
+          if (!CHARACTER_LABEL[character]) return res.status(400).json({ error: "Invalid character" });
+
           const others = await getLatestPlayersByUser(tx, player.roomId);
           const isActiveSocket = (sid) => !!sid && !!io && !!io.sockets && !!io.sockets.sockets && io.sockets.sockets.has(sid);
           const activeOthers = others.filter((p) => p.userId !== player.userId && isActiveSocket(p.socketId));

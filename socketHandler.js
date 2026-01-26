@@ -202,9 +202,7 @@
         }else{
           player=await prisma.player.update({where:{id:player.id},data:{socketId:socket.id},include:{assets:true}});
         }
-        if(room.status==="WAITING"&&player.character){
-          player=await prisma.player.update({where:{id:player.id},data:{character:null},include:{assets:true}});
-        }
+        // Do not clear character on refresh while waiting; keep existing selection.
         if(room.status==="WAITING"){
           lobbyState.readyUserIds.delete(sessionUserId);
         }
