@@ -5,7 +5,7 @@ const https = require("https");
 const INITIAL_CASH = 3000000n;
 const MUSK_BONUS = 1000000n;
 const LEE_START_SAMSUNG_SHARES = 10;
-const TRUMP_TOLL_BONUS_RATE = 0.05;
+const TRUMP_TOLL_BONUS_RATE = 0.10;
 const PUTIN_WAR_BONUS = 10; // 전쟁 승률 10% 증가
 
 // 전쟁 승률 관련 상수
