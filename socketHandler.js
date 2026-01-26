@@ -333,8 +333,7 @@
 
         // 순서 뽑기 단계 시작 - 카드 번호는 랜덤 배치
         const cardIds=Array.from({length:activePlayers.length},(_,i)=>i+1);
-        const cardNumbers=shuffleArray(cardIds.slice());
-        const cardValues=new Map(cardIds.map((id,idx)=>[id,cardNumbers[idx]]));
+        const cardValues=new Map(cardIds.map((id)=>[id,id]));
         const availableCards=shuffleArray(cardIds.slice());
         orderPickingByRoom.set(info.roomId,{
           cardIds,
@@ -502,8 +501,8 @@
         io.to(info.roomId).emit("dice_rolling_started",{userId});
         setTimeout(()=>{
           try{
-            io.to(result.roomId).emit("dice_rolled",{userId,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,player:result.player,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
-            io.to(result.roomId).emit("playerMove",{userId,playerId:result.player.id,character:result.player.character,oldLocation:result.oldLocation,newLocation:result.newLocation,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
+            io.to(result.roomId).emit("dice_rolled",{userId,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,player:result.player,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents,tollPaid:result.tollPaid});
+            io.to(result.roomId).emit("playerMove",{userId,playerId:result.player.id,character:result.player.character,oldLocation:result.oldLocation,newLocation:result.newLocation,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents,tollPaid:result.tollPaid});
             if(result.cardEvent){
               io.to(result.roomId).emit("drawCard",result.cardEvent);
             }

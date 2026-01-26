@@ -90,12 +90,36 @@ function createGameLogic({ prisma, io, market }) {
     });
   }
 
+  function isMarketEvent(event) {
+    const text = `${event?.type ?? ""} ${event?.title ?? ""} ${event?.message ?? ""}`.toLowerCase();
+    return text.includes("market") || text.includes("시장") || text.includes("price");
+  }
+
+  function prioritizeNewsEvents(events) {
+    const list = Array.isArray(events) ? events.slice() : [];
+    const scoreEvent = (event) => {
+      const text = `${event?.type ?? ""} ${event?.title ?? ""} ${event?.message ?? ""}`.toLowerCase();
+      let score = 0;
+      if (text.includes("war") || text.includes("전쟁")) score += 4;
+      if (text.includes("worldcup") || text.includes("월드컵")) score += 3;
+      if (text.includes("golden key") || text.includes("goldenkey") || text.includes("황금열쇠")) score += 3;
+      if (text.includes("space") || text.includes("우주")) score += 3;
+      if (text.includes("tax") || text.includes("세금")) score += 2;
+      if (text.includes("land") || text.includes("부동산") || text.includes("매입") || text.includes("매각")) score += 2;
+      if (text.includes("move") || text.includes("이동") || text.includes("도착")) score += 1;
+      if (isMarketEvent(event)) score -= 1;
+      return score;
+    };
+    return list.sort((a, b) => scoreEvent(b) - scoreEvent(a));
+  }
+
   function buildFallbackNews({ round, events, locale }) {
     const safeRound = Number.isFinite(round) ? round : 0;
-    const safeEvents = Array.isArray(events) ? events : [];
+    const safeEvents = prioritizeNewsEvents(events);
     const safeLocale = typeof locale === "string" && locale ? locale : "en";
+    const headlineEvent = safeEvents.find((event) => !isMarketEvent(event)) || safeEvents[0];
     const headline =
-      safeEvents[0]?.title ||
+      headlineEvent?.title ||
       (safeLocale.startsWith("ko") ? `라운드 ${safeRound} 소식` : `Round ${safeRound} News`);
     const summaryEvents = safeEvents
       .slice(0, 3)
@@ -117,7 +141,7 @@ function createGameLogic({ prisma, io, market }) {
     if (!apiKey) throw new Error("GEMINI_API_KEY missing");
     const safeRound = Number.isFinite(round) ? round : 0;
     const safeLocale = typeof locale === "string" && locale ? locale : "ko";
-    const safeEvents = Array.isArray(events) ? events : [];
+    const safeEvents = prioritizeNewsEvents(events);
     console.log(`[News] Gemini request start: round=${safeRound}, locale=${safeLocale}, events=${safeEvents.length}`);
     const eventLines = safeEvents
       .slice(0, 10)
@@ -134,6 +158,9 @@ function createGameLogic({ prisma, io, market }) {
       `Write a free-form headline and a 2-3 sentence summary in locale "${safeLocale}".`,
       `Never mention user names; refer to players by character names (e.g., TRUMP, LEE, MUSK, PUTIN).`,
       `Call out surging/crashing stocks, real estate, or continents when present in the events.`,
+      `If events mention World Cup hosting or Golden Key draws, weave them into the headline or summary.`,
+      `Pick the most distinctive event for the headline; avoid generic market headlines unless market updates are the only notable events.`,
+      `Avoid rigid templates, colon-separated lists, or formulaic phrasing. Vary sentence starts.`,
       `Topic: round ${safeRound} in a competitive board/stock game.`,
       `Return JSON: {"headline":"...","summary":"..."}. No markdown.`,
       `Events:`,
@@ -145,14 +172,14 @@ function createGameLogic({ prisma, io, market }) {
         role: "system",
         parts: [
           {
-            text: "Return ONLY valid JSON with keys headline and summary. No preface text, no markdown, no code fences. Do not mention user names; refer to players by character names only. Highlight surging/crashing assets, real estate, or continents when present. Write a free-form headline and a 2-3 sentence summary without fixed templates.",
+            text: "Return ONLY valid JSON with keys headline and summary. No preface text, no markdown, no code fences. Do not mention user names; refer to players by character names only. Highlight surging/crashing assets, real estate, or continents when present. Write a free-form headline and a 2-3 sentence summary without fixed templates. If events mention World Cup hosting or Golden Key draws, weave them into the headline or summary. Pick the most distinctive event for the headline; avoid generic market headlines unless market updates are the only notable events. Avoid rigid templates, colon-separated lists, or formulaic phrasing.",
           },
         ],
       },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 256,
+        maxOutputTokens: 512,
         responseMimeType: "application/json",
         responseSchema: {
           type: "object",
@@ -173,6 +200,7 @@ function createGameLogic({ prisma, io, market }) {
     });
 
     console.log(`[News] Gemini response status: ${response.status}`);
+    console.log(`[News] Gemini response data: ${response.data.slice(0, 1000)}`);
     if (response.status < 200 || response.status >= 300) {
       throw new Error("Gemini request failed");
     }
@@ -183,6 +211,7 @@ function createGameLogic({ prisma, io, market }) {
       throw new Error("Invalid Gemini response");
     }
     const parts = payload?.candidates?.[0]?.content?.parts;
+    console.log(`[News] Gemini parts: ${JSON.stringify(parts).slice(0, 1000)}`);
     const text = Array.isArray(parts)
       ? parts.map((p) => (p && typeof p.text === "string" ? p.text : "")).join("\n").trim()
       : "";
@@ -198,8 +227,19 @@ function createGameLogic({ prisma, io, market }) {
 
     const extractJson = (raw) => {
       const trimmed = String(raw || "").trim();
-      const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-      if (fenced && fenced[1]) return fenced[1].trim();
+      // 마크다운 코드 블록 추출 (greedy하게 매칭)
+      const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (fenced && fenced[1]) {
+        const inner = fenced[1].trim();
+        // 코드 블록 내부에서 JSON 객체만 추출
+        const jsonStart = inner.indexOf("{");
+        const jsonEnd = inner.lastIndexOf("}");
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+          return inner.slice(jsonStart, jsonEnd + 1);
+        }
+        return inner;
+      }
+      // 코드 블록이 없으면 직접 JSON 객체 추출
       const start = trimmed.indexOf("{");
       const end = trimmed.lastIndexOf("}");
       if (start >= 0 && end > start) return trimmed.slice(start, end + 1);
@@ -207,18 +247,27 @@ function createGameLogic({ prisma, io, market }) {
     };
 
     let parsed;
+    // 먼저 JSON 추출 시도 (마크다운 코드 블록 처리)
+    const extracted = extractJson(text);
+    const cleaned = cleanJson(extracted);
+
+    console.log(`[News] DEBUG raw text (${text.length} chars): ${JSON.stringify(text.slice(0, 500))}`);
+    console.log(`[News] DEBUG extracted (${extracted.length} chars): ${JSON.stringify(extracted.slice(0, 500))}`);
+    console.log(`[News] DEBUG cleaned (${cleaned.length} chars): ${JSON.stringify(cleaned.slice(0, 500))}`);
+
     try {
-      parsed = JSON.parse(text);
-    } catch {
+      parsed = JSON.parse(cleaned);
+      console.log(`[News] DEBUG parsed from cleaned successfully`);
+    } catch (e1) {
+      console.log(`[News] DEBUG cleaned parse error: ${e1.message}`);
       try {
-        parsed = JSON.parse(cleanJson(extractJson(text)));
-      } catch {
-        const raw = String(text || "").trim();
-        const extracted = extractJson(raw);
-        console.log(`[News] Gemini raw text fallback: ${raw.slice(0, 400)}`);
-        console.log(`[News] Gemini extracted text fallback: ${String(extracted).slice(0, 400)}`);
-        const headlineMatch = raw.match(/headline\s*[:=]\s*(.+)/i);
-        const summaryMatch = raw.match(/summary\s*[:=]\s*([\s\S]+)/i);
+        // 순수 텍스트로 직접 파싱 시도
+        parsed = JSON.parse(text);
+        console.log(`[News] DEBUG parsed from raw text successfully`);
+      } catch (e2) {
+        console.log(`[News] DEBUG raw parse error: ${e2.message}`);
+        const headlineMatch = text.match(/(?:headline|제목|헤드라인)\s*[:=]\s*"?([^"\n]+)"?/i);
+        const summaryMatch = text.match(/(?:summary|요약|요지)\s*[:=]\s*"?([\s\S]+?)"?(?:\s*}|$)/i);
         if (headlineMatch && summaryMatch) {
           parsed = {
             headline: headlineMatch[1].trim(),
@@ -529,10 +578,13 @@ function createGameLogic({ prisma, io, market }) {
       }
 
       // 6. 일반 땅 및 통행료 처리 (월드컵 포함)
+      let tollPaid = null;
+      let tollOwnerUserId = null;
+      let landIsLandmark = false;
       const mapNode = await tx.mapNode.findUnique({ where: { nodeIdx: newLocation } });
-      if (mapNode?.type === "LAND" || mapNode?.type === "EXPO") { 
+      if (mapNode?.type === "LAND" || mapNode?.type === "EXPO") {
         const land = await tx.gameLand.findFirst({ where: { roomId: updatedPlayer.roomId, nodeIdx: newLocation } });
-        
+
         // 내 땅 도착: 방문 횟수 증가
         if (land && land.ownerId === updatedPlayer.id) {
           incrementVisit(updatedPlayer.id, newLocation);
@@ -541,8 +593,9 @@ function createGameLogic({ prisma, io, market }) {
         else if (land && land.ownerId && land.ownerId !== updatedPlayer.id) {
           const owner = await tx.player.findUnique({ where: { id: land.ownerId } });
           if (owner) {
+            landIsLandmark = land.isLandmark;
             let toll = getLandBaseToll(newLocation, mapNode.baseToll);
-            
+
             // 월드컵 개최지면 통행료 2배 (임시 로직)
             if (land.hasWorldCup) toll = toll * 2n;
 
@@ -552,11 +605,13 @@ function createGameLogic({ prisma, io, market }) {
             const sold = await autoSellAssets(tx, updatedPlayer, toll, marketData);
             updatedPlayer = sold.player;
             const payAmount = updatedPlayer.cash < toll ? updatedPlayer.cash : toll;
-            
+
             updatedPlayer = await tx.player.update({ where: { id: updatedPlayer.id }, data: { cash: updatedPlayer.cash - payAmount } });
-            await tx.player.update({ where: { id: owner.id }, data: { cash: owner.cash + payAmount } });
-            
+            const updatedOwner = await tx.player.update({ where: { id: owner.id }, data: { cash: owner.cash + payAmount } });
+
             tollOwnerId = owner.id;
+            tollOwnerUserId = owner.userId;
+            tollPaid = { amount: Number(payAmount), ownerId: owner.id, ownerUserId: owner.userId, ownerCash: Number(updatedOwner.cash), isLandmark: landIsLandmark };
             if (sold.autoSales.length) {
                 autoSellEvents.push({ type: "TOLL", items: sold.autoSales, amount: toll, paid: payAmount, bankrupt: !sold.covered, ownerId: owner.id });
             }
@@ -573,12 +628,13 @@ function createGameLogic({ prisma, io, market }) {
         player: updatedPlayer,
         roomId: updatedPlayer.roomId,
         tollOwnerId,
+        tollPaid,
         turnPlayerId,
         turnUserId,
         market: marketData,
         war: getWarPayload(),
         autoSellEvents,
-        actionRequired, 
+        actionRequired,
         eventResult
       };
     });
