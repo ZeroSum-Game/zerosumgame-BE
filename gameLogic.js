@@ -298,7 +298,16 @@ function createGameLogic({ prisma, io, market }) {
     if (!room) return null;
     const players = await getLatestPlayersByUser(tx, roomId);
     if (players.length === 0) return null;
-    
+
+    const storedOrder = roomTurnOrder.get(roomId);
+    if (Array.isArray(storedOrder) && storedOrder.length > 0) {
+      const playerIdSet = new Set(players.map((p) => p.id));
+      const filtered = storedOrder.filter((id) => playerIdSet.has(id));
+      if (filtered.length > 0) {
+        return filtered[room.turnPlayerIdx % filtered.length];
+      }
+    }
+
     const sorted = players.slice().sort((a, b) => a.id - b.id);
     return sorted[room.turnPlayerIdx % sorted.length].id;
   }
