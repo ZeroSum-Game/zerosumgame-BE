@@ -1,4 +1,5 @@
 const express = require("express");
+const https = require("https");
 
 // ================= CONSTANTS & CONFIG =================
 const INITIAL_CASH = 3000000n;
@@ -60,6 +61,181 @@ function createGameLogic({ prisma, io, market }) {
   const landLastAction = new Map();
 
   // ================= HELPER FUNCTIONS =================
+  function postJson({ hostname, path, headers, body }) {
+    return new Promise((resolve, reject) => {
+      const req = https.request(
+        {
+          hostname,
+          path,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body),
+            ...headers,
+          },
+        },
+        (res) => {
+          let data = "";
+          res.on("data", (chunk) => {
+            data += chunk;
+          });
+          res.on("end", () => {
+            resolve({ status: res.statusCode || 0, data });
+          });
+        }
+      );
+      req.on("error", reject);
+      req.write(body);
+      req.end();
+    });
+  }
+
+  function buildFallbackNews({ round, events, locale }) {
+    const safeRound = Number.isFinite(round) ? round : 0;
+    const safeEvents = Array.isArray(events) ? events : [];
+    const safeLocale = typeof locale === "string" && locale ? locale : "en";
+    const headline =
+      safeEvents[0]?.title ||
+      (safeLocale.startsWith("ko") ? `라운드 ${safeRound} 소식` : `Round ${safeRound} News`);
+    const summaryEvents = safeEvents
+      .slice(0, 3)
+      .map((e) => {
+        const title = String(e?.title ?? "").trim();
+        const message = String(e?.message ?? "").trim();
+        if (title && message) return `${title}: ${message}`;
+        return title || message;
+      })
+      .filter(Boolean);
+    const summary =
+      summaryEvents.join(" ") ||
+      (safeLocale.startsWith("ko") ? "현재 라운드의 주요 소식이 업데이트되었습니다." : "Key updates from the current round are available.");
+    return { headline, summary };
+  }
+
+  async function generateNewsWithGemini({ round, events, locale }) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("GEMINI_API_KEY missing");
+    const safeRound = Number.isFinite(round) ? round : 0;
+    const safeLocale = typeof locale === "string" && locale ? locale : "ko";
+    const safeEvents = Array.isArray(events) ? events : [];
+    console.log(`[News] Gemini request start: round=${safeRound}, locale=${safeLocale}, events=${safeEvents.length}`);
+    const eventLines = safeEvents
+      .slice(0, 10)
+      .map((e, idx) => {
+        const title = String(e?.title ?? "").slice(0, 120);
+        const message = String(e?.message ?? "").slice(0, 240);
+        const type = String(e?.type ?? "").slice(0, 40);
+        return `${idx + 1}. [${type}] ${title} - ${message}`;
+      })
+      .join("\n");
+
+    const prompt = [
+      `You are a game newsroom editor.`,
+      `Write a free-form headline and a 2-3 sentence summary in locale "${safeLocale}".`,
+      `Never mention user names; refer to players by character names (e.g., TRUMP, LEE, MUSK, PUTIN).`,
+      `Call out surging/crashing stocks, real estate, or continents when present in the events.`,
+      `Topic: round ${safeRound} in a competitive board/stock game.`,
+      `Return JSON: {"headline":"...","summary":"..."}. No markdown.`,
+      `Events:`,
+      eventLines || "None.",
+    ].join("\n");
+
+    const body = JSON.stringify({
+      systemInstruction: {
+        role: "system",
+        parts: [
+          {
+            text: "Return ONLY valid JSON with keys headline and summary. No preface text, no markdown, no code fences. Do not mention user names; refer to players by character names only. Highlight surging/crashing assets, real estate, or continents when present. Write a free-form headline and a 2-3 sentence summary without fixed templates.",
+          },
+        ],
+      },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 256,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "object",
+          properties: {
+            headline: { type: "string" },
+            summary: { type: "string" },
+          },
+          required: ["headline", "summary"],
+        },
+      },
+    });
+
+    const path = `/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const response = await postJson({
+      hostname: "generativelanguage.googleapis.com",
+      path,
+      body,
+    });
+
+    console.log(`[News] Gemini response status: ${response.status}`);
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error("Gemini request failed");
+    }
+    let payload;
+    try {
+      payload = JSON.parse(response.data);
+    } catch {
+      throw new Error("Invalid Gemini response");
+    }
+    const parts = payload?.candidates?.[0]?.content?.parts;
+    const text = Array.isArray(parts)
+      ? parts.map((p) => (p && typeof p.text === "string" ? p.text : "")).join("\n").trim()
+      : "";
+    if (!text) throw new Error("Empty Gemini response");
+    const cleanJson = (raw) => {
+      const cleaned = String(raw || "")
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'")
+        .replace(/,\s*([}\]])/g, "$1")
+        .trim();
+      return cleaned;
+    };
+
+    const extractJson = (raw) => {
+      const trimmed = String(raw || "").trim();
+      const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      if (fenced && fenced[1]) return fenced[1].trim();
+      const start = trimmed.indexOf("{");
+      const end = trimmed.lastIndexOf("}");
+      if (start >= 0 && end > start) return trimmed.slice(start, end + 1);
+      return trimmed;
+    };
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      try {
+        parsed = JSON.parse(cleanJson(extractJson(text)));
+      } catch {
+        const raw = String(text || "").trim();
+        const extracted = extractJson(raw);
+        console.log(`[News] Gemini raw text fallback: ${raw.slice(0, 400)}`);
+        console.log(`[News] Gemini extracted text fallback: ${String(extracted).slice(0, 400)}`);
+        const headlineMatch = raw.match(/headline\s*[:=]\s*(.+)/i);
+        const summaryMatch = raw.match(/summary\s*[:=]\s*([\s\S]+)/i);
+        if (headlineMatch && summaryMatch) {
+          parsed = {
+            headline: headlineMatch[1].trim(),
+            summary: summaryMatch[1].trim(),
+          };
+        } else {
+          console.warn("[News] Gemini JSON parse failed, using fallback response");
+          parsed = buildFallbackNews({ round: safeRound, events: safeEvents, locale: safeLocale });
+        }
+      }
+    }
+    const headline = String(parsed?.headline ?? "").trim();
+    const summary = String(parsed?.summary ?? "").trim();
+    if (!headline || !summary) throw new Error("Incomplete Gemini response");
+    console.log(`[News] Gemini response parsed: headline="${headline.slice(0, 80)}"`);
+    return { headline, summary };
+  }
 
   function getLandKey(playerId, nodeIdx) { return `${playerId}:${nodeIdx}`; }
   function getVisitCount(playerId, nodeIdx) { return landVisitCount.get(getLandKey(playerId, nodeIdx)) || 0; }
@@ -503,6 +679,20 @@ function createGameLogic({ prisma, io, market }) {
         });
         return res.json(result);
       } catch (e) { return res.status(500).json({ error: "Failed to load user" }); }
+    });
+
+    router.post("/api/news", requireAuth, async (req, res) => {
+      try {
+        const round = Number(req.body?.round ?? 0);
+        const events = Array.isArray(req.body?.events) ? req.body.events : [];
+        const locale = typeof req.body?.locale === "string" ? req.body.locale : "ko";
+        const result = await generateNewsWithGemini({ round, events, locale });
+        return res.json(result);
+      } catch (e) {
+        console.error("[News] Gemini request failed:", e);
+        const message = e?.message === "GEMINI_API_KEY missing" ? e.message : "News generation failed";
+        return res.status(500).json({ error: message });
+      }
     });
 
     router.get("/api/map", async (req, res) => {
