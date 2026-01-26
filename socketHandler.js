@@ -4,6 +4,17 @@
   const orderPickingByRoom=new Map();
   const rollingUserByRoom=new Map();
 
+  function shuffleArray(items){
+    const arr=items.slice();
+    for(let i=arr.length-1;i>0;i-=1){
+      const j=Math.floor(Math.random()*(i+1));
+      const temp=arr[i];
+      arr[i]=arr[j];
+      arr[j]=temp;
+    }
+    return arr;
+  }
+
   io.use((socket,next)=>{
     try{
       const token=socket.handshake.auth?.token;
@@ -33,7 +44,9 @@
       ready:lobby.readyUserIds.has(p.userId),
       isHost:lobby.hostUserId===p.userId
     }));
-    const allReady=players.length>0&&players.every((p)=>p.ready);
+    const MIN_PLAYERS=2;
+    // 모든 플레이어(방장 포함)가 준비되었는지 체크 (최소 인원 이상)
+    const allReady=players.length>=MIN_PLAYERS&&players.every((p)=>p.ready);
     return{hostUserId:lobby.hostUserId,players,allReady};
   }
 
@@ -107,7 +120,7 @@
     if(currentTurn&&!gameLogic.turnStateByRoom.get(roomId)){
       gameLogic.turnStateByRoom.set(roomId,{userId:currentTurn,rolled:false,extraRoll:false});
     }
-    return{turnPlayerId,currentTurn,turnOrder,turnOrderPlayerIds,players:playersPayload};
+    return{resume:true,turnPlayerId,currentTurn,turnOrder,turnOrderPlayerIds,players:playersPayload};
   }
 
   async function ensureCurrentTurnUser(roomId){
@@ -192,6 +205,9 @@
         if(room.status==="WAITING"&&player.character){
           player=await prisma.player.update({where:{id:player.id},data:{character:null},include:{assets:true}});
         }
+        if(room.status==="WAITING"){
+          lobbyState.readyUserIds.delete(sessionUserId);
+        }
         if(room.status==="PLAYING"){
           await syncLobbyPlayers(resolvedRoomId);
           if(!gameLogic.roomTurnOrder.get(resolvedRoomId)){
@@ -264,7 +280,9 @@
           return;
         }
         if(room.status==="PLAYING"){
-          socket.emit("start_error",{message:"Game already started"});
+          await ensureCurrentTurnUser(roomId);
+          const resumePayload=await buildResumePayload(roomId);
+          socket.emit("game_start",resumePayload);
           return;
         }
         if(orderPickingByRoom.has(roomId)){
@@ -299,6 +317,11 @@
           }
         });
         const lobbyPayload=buildLobbyPayload(roomId);
+        const MIN_PLAYERS=2;
+        if(activePlayers.length<MIN_PLAYERS){
+          socket.emit("start_error",{message:"At least 2 players are required"});
+          return;
+        }
         if(lobbyPayload.players.length<2||!lobbyPayload.allReady){
           socket.emit("start_error",{message:"All players must be ready"});
           return;
@@ -307,8 +330,15 @@
           socket.emit("start_error",{message:"All players must select a character"});
           return;
         }
-        const availableCards=Array.from({length:activePlayers.length},(_,i)=>i+1);
-        orderPickingByRoom.set(roomId,{
+
+        // 순서 뽑기 단계 시작 - 카드 번호는 랜덤 배치
+        const cardIds=Array.from({length:activePlayers.length},(_,i)=>i+1);
+        const cardNumbers=shuffleArray(cardIds.slice());
+        const cardValues=new Map(cardIds.map((id,idx)=>[id,cardNumbers[idx]]));
+        const availableCards=shuffleArray(cardIds.slice());
+        orderPickingByRoom.set(info.roomId,{
+          cardIds,
+          cardValues,
           availableCards,
           picks:new Map(),
           players:activePlayers.map((p)=>({
@@ -332,60 +362,98 @@
           return;
         }
         const roomId=info.roomId;
+        const userId=info.userId;
         const orderState=orderPickingByRoom.get(roomId);
         if(!orderState){
           socket.emit("pick_error",{message:"Order picking not active"});
           return;
         }
-        const pick=Number(cardNumber);
-        if(!Number.isInteger(pick)){
+        const cardId=Number(cardNumber);
+        if(!Number.isInteger(cardId)){
           socket.emit("pick_error",{message:"Invalid card"});
           return;
         }
-        if(!orderState.availableCards.includes(pick)){
+        const availableCards=orderState.availableCards||orderState.cardIds;
+        if(!availableCards.includes(cardId)){
           socket.emit("pick_error",{message:"Invalid card"});
           return;
         }
-        if(orderState.picks.has(info.userId)){
-          socket.emit("pick_error",{message:"Already picked"});
-          return;
-        }
-        if(Array.from(orderState.picks.values()).includes(pick)){
-          socket.emit("pick_error",{message:"Card already taken"});
-          return;
-        }
-        orderState.picks.set(info.userId,pick);
-        const pickedCards=Array.from(orderState.picks.values());
-        io.to(roomId).emit("order_card_picked",{userId:info.userId,cardNumber:pick,pickedCards});
 
+        // 유효한 카드인지 확인
+        if(!orderState.cardIds.includes(cardId)){
+          socket.emit("pick_error",{message:"유효하지 않은 카드입니다."});
+          return;
+        }
+
+        // 이미 다른 사람이 선택한 카드인지 확인
+        const pickedCards=Array.from(orderState.picks.values());
+        if(pickedCards.includes(cardId)){
+          socket.emit("pick_error",{message:"이미 선택된 카드입니다."});
+          return;
+        }
+
+        // 카드 선택 저장
+        orderState.picks.set(userId,cardId);
+        const cardNumberValue=orderState.cardValues.get(cardId);
+        console.log(`[Order Pick] User ${userId} picked card ${cardId} => ${cardNumberValue}`);
+
+        // 모든 클라이언트에게 선택 상황 알림
+        io.to(info.roomId).emit("order_card_picked",{
+          userId,
+          cardId,
+          cardNumber:cardNumberValue,
+          pickedCards:Array.from(orderState.picks.values()),
+          remainingCards:orderState.cardIds.filter((c)=>!Array.from(orderState.picks.values()).includes(c))
+        });
+
+        // 모든 플레이어가 선택했는지 확인
         if(orderState.picks.size===orderState.players.length){
-          const pickByUser=new Map(orderState.picks);
-          const ordered=orderState.players
-            .map((p)=>({
-              ...p,
-              cardNumber:pickByUser.get(p.userId)
-            }))
-            .filter((p)=>Number.isInteger(p.cardNumber))
-            .sort((a,b)=>a.cardNumber-b.cardNumber);
-          const orderResults=ordered.map((p,idx)=>({
+          // 순서 결정 및 게임 시작
+          const sortedPlayers=[...orderState.players].sort((a,b)=>{
+            const aCardId=orderState.picks.get(a.userId);
+            const bCardId=orderState.picks.get(b.userId);
+            const aCard=orderState.cardValues.get(aCardId)||99;
+            const bCard=orderState.cardValues.get(bCardId)||99;
+            return aCard-bCard;
+          });
+
+          const orderPlayerIds=sortedPlayers.map((p)=>p.playerId);
+          const orderUserIds=sortedPlayers.map((p)=>p.userId);
+
+          gameLogic.roomTurnOrder.set(info.roomId,orderPlayerIds);
+        const currentTurn=orderUserIds[0]||null;
+        gameLogic.currentTurnUserByRoom.set(info.roomId,currentTurn);
+        market.clearTradeLock(info.roomId);
+        gameLogic.actionWindowByRoom.delete(info.roomId);
+        gameLogic.turnStateByRoom.set(info.roomId,{userId:currentTurn,rolled:false,extraRoll:false});
+
+        await prisma.$transaction(async(tx)=>{
+          await tx.room.update({where:{id:roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1,maxTurn:10}});
+          await market.resetMarketDefaults(tx,roomId);
+        });
+
+        const lobbyInfo=buildLobbyPayload(info.roomId);
+        const nicknameByUser=new Map(lobbyInfo.players.map((p)=>[p.userId,p.nickname]));
+        const allPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
+        const activeUserIds=new Set(lobbyInfo.players.map((p)=>p.userId));
+          const players=allPlayers.filter((p)=>activeUserIds.has(p.userId));
+
+          const playersPayload=players.map((p)=>({
+            playerId:p.id,
+            userId:p.userId,
+            nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`,
+            character:p.character||null,
+            location:typeof p.location==="number"?p.location:0
+          }));
+
+          // 순서 결과를 먼저 보여주고
+          const orderResults=sortedPlayers.map((p,idx)=>({
             userId:p.userId,
             playerId:p.playerId,
-            cardNumber:p.cardNumber,
+            cardNumber:orderState.cardValues.get(orderState.picks.get(p.userId))||0,
             turnOrder:idx+1,
             nickname:p.nickname
           }));
-          const turnOrderPlayerIds=ordered.map((p)=>p.playerId);
-          gameLogic.roomTurnOrder.set(roomId,turnOrderPlayerIds);
-          const firstUserId=ordered[0]?.userId||null;
-          if(firstUserId)gameLogic.currentTurnUserByRoom.set(roomId,firstUserId);
-          if(firstUserId)gameLogic.turnStateByRoom.set(roomId,{userId:firstUserId,rolled:false,extraRoll:false});
-          gameLogic.actionWindowByRoom.delete(roomId);
-          market.clearTradeLock(roomId);
-
-          await prisma.$transaction(async(tx)=>{
-            await tx.room.update({where:{id:roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1,maxTurn:10}});
-            await market.resetMarketDefaults(tx,roomId);
-          });
 
           io.to(roomId).emit("order_picking_complete",{orderResults});
           orderPickingByRoom.delete(roomId);
@@ -393,7 +461,7 @@
           setTimeout(()=>{
             void (async()=>{
               try{
-                const payload=await buildStartPayload(roomId,turnOrderPlayerIds);
+                const payload=await buildStartPayload(roomId,orderPlayerIds);
                 io.to(roomId).emit("game_start",payload);
                 io.to(roomId).emit("lobby_update",buildLobbyPayload(roomId));
               }catch(err){
@@ -500,12 +568,18 @@
         market.clearTradeLock(info.roomId);
         await prisma.player.updateMany({where:{roomId:info.roomId,userId},data:{extraTurnUsed:false}});
 
+        const lobbyPlayersSnapshot=Array.from(getLobbyState(info.roomId).players.values());
+        const lobbyUserByPlayerId=new Map(lobbyPlayersSnapshot.map((p)=>[p.playerId,p.userId]));
+
         const turnResult=await prisma.$transaction(async(tx)=>{
           const room=await tx.room.findUnique({where:{id:info.roomId}});
           if(!room)throw new Error("Room not found");
           const allPlayers=await gameLogic.getLatestPlayersByUser(tx,info.roomId);
           const activePlayers=allPlayers.filter((p)=>isActiveSocketId(p.socketId));
-          const players=activePlayers.length?activePlayers:allPlayers;
+          let players=activePlayers.length?activePlayers:allPlayers;
+          if(players.length===0&&lobbyPlayersSnapshot.length){
+            players=lobbyPlayersSnapshot.map((p)=>({id:p.playerId,userId:p.userId}));
+          }
           if(players.length===0)throw new Error("No players in room");
           let turnOrder=gameLogic.roomTurnOrder.get(info.roomId);
           const playerIds=players.map((p)=>p.id);
@@ -528,7 +602,8 @@
           await tx.room.update({where:{id:info.roomId},data:updateData});
           const nextPlayerId=turnOrder[nextIndex];
           const nextPlayer=await tx.player.findUnique({where:{id:nextPlayerId},select:{userId:true}});
-          return{room,turnOrder,nextIndex,wrapped,nextTurn,reachedEnd,nextPlayerId,nextUserId:nextPlayer?.userId||null};
+          const fallbackUserId=lobbyUserByPlayerId.get(nextPlayerId)||null;
+          return{room,turnOrder,nextIndex,wrapped,nextTurn,reachedEnd,nextPlayerId,nextUserId:nextPlayer?.userId||fallbackUserId};
         });
 
         let warEnded=false;
