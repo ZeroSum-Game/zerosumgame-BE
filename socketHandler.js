@@ -1,7 +1,8 @@
-function initSocketHandlers({io,prisma,auth,gameLogic,market}){
+﻿function initSocketHandlers({io,prisma,auth,gameLogic,market}){
   const lobbyStateByRoom=new Map();
   const socketUserMap=new Map();
-  const orderPickingByRoom=new Map(); // 순서 뽑기 상태: {cards: [1,2,3,4], picks: Map<userId, cardNum>}
+  const orderPickingByRoom=new Map();
+  const rollingUserByRoom=new Map();
 
   io.use((socket,next)=>{
     try{
@@ -10,7 +11,7 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
       const user=auth.verifySocketToken(token);
       socket.user=user;
       return next();
-    }catch(e){
+    }catch(err){
       return next(new Error("Unauthorized"));
     }
   });
@@ -32,19 +33,12 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
       ready:lobby.readyUserIds.has(p.userId),
       isHost:lobby.hostUserId===p.userId
     }));
-    // 모든 플레이어(방장 포함)가 준비되었는지 체크
     const allReady=players.length>0&&players.every((p)=>p.ready);
     return{hostUserId:lobby.hostUserId,players,allReady};
   }
 
-  function shuffleArray(arr){
-    for(let i=arr.length-1;i>0;i-=1){
-      const j=Math.floor(Math.random()*(i+1));
-      [arr[i],arr[j]]=[arr[j],arr[i]];
-    }
-    return arr;
-  }
   function resetWarState(){
+    if(!gameLogic.warState)return;
     gameLogic.warState.active=false;
     gameLogic.warState.warLine=null;
     gameLogic.warState.warNode=null;
@@ -53,13 +47,16 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
     gameLogic.warState.recoveryLine=1;
     gameLogic.warState.recoveryNode=1;
   }
+
   function isActiveSocketId(socketId){
     return !!socketId&&!!io&&!!io.sockets&&!!io.sockets.sockets&&io.sockets.sockets.has(socketId);
   }
+
   async function getActivePlayersByUser(roomId){
     const players=await gameLogic.getLatestPlayersByUser(prisma,roomId);
     return players.filter((p)=>isActiveSocketId(p.socketId));
   }
+
   async function syncLobbyPlayers(roomId){
     const lobby=getLobbyState(roomId);
     if(lobby.players.size>0)return lobby;
@@ -78,6 +75,7 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
     if(!lobby.hostUserId&&players.length>0)lobby.hostUserId=players[0].userId;
     return lobby;
   }
+
   async function buildResumePayload(roomId){
     const players=await getActivePlayersByUser(roomId);
     const users=players.length?await prisma.user.findMany({where:{id:{in:players.map((p)=>p.userId)}},select:{id:true,nickname:true}}):[];
@@ -111,57 +109,74 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
     return{turnPlayerId,currentTurn,turnOrder,turnOrderPlayerIds,players:playersPayload};
   }
 
-  io.on("connection",(socket)=>{
-    console.log(`User connected: ${socket.id}`);
+  async function ensureCurrentTurnUser(roomId){
+    let currentTurn=gameLogic.currentTurnUserByRoom.get(roomId)||null;
+    if(currentTurn)return currentTurn;
+    const turnPlayerId=await prisma.$transaction(async(tx)=>gameLogic.getTurnPlayerId(tx,roomId));
+    if(!turnPlayerId)return null;
+    const turnPlayer=await prisma.player.findUnique({where:{id:turnPlayerId},select:{userId:true}});
+    currentTurn=turnPlayer?.userId||null;
+    if(currentTurn)gameLogic.currentTurnUserByRoom.set(roomId,currentTurn);
+    return currentTurn;
+  }
 
+  async function buildStartPayload(roomId,turnOrderPlayerIds){
+    const players=await prisma.player.findMany({where:{id:{in:turnOrderPlayerIds}}});
+    const users=await prisma.user.findMany({where:{id:{in:players.map((p)=>p.userId)}},select:{id:true,nickname:true}});
+    const nicknameByUser=new Map(users.map((u)=>[u.id,u.nickname]));
+    const byId=new Map(players.map((p)=>[p.id,p]));
+    const orderedPlayers=turnOrderPlayerIds.map((id)=>byId.get(id)).filter(Boolean);
+    const playersPayload=orderedPlayers.map((p)=>({
+      playerId:p.id,
+      userId:p.userId,
+      nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`,
+      character:p.character||null,
+      location:typeof p.location==="number"?p.location:0,
+      cash:p.cash,
+      totalAsset:p.totalAsset
+    }));
+    const currentTurn=gameLogic.currentTurnUserByRoom.get(roomId)||playersPayload[0]?.userId||null;
+    const turnOrder=playersPayload.map((p)=>p.userId);
+    return{players:playersPayload,currentTurn,turnOrder,turnOrderPlayerIds,turnPlayerId:playersPayload[0]?.playerId||null};
+  }
+
+  io.on("connection",(socket)=>{
     socket.on("join_room",async(roomId)=>{
       try{
         const sessionUserId=socket.user?.id;
-        console.log(`[join_room] User ${sessionUserId} attempting to join room ${roomId}`);
-        if(!sessionUserId){
-          socket.emit("join_error",{message:"User session not found"});
+        const numericRoomId=Number(roomId);
+        if(!sessionUserId||!Number.isInteger(numericRoomId)){
+          socket.emit("join_error",{message:"Invalid room"});
           return;
         }
-        let room=await prisma.room.findUnique({where:{id:roomId}});
+        const resolvedRoomId=numericRoomId;
+        let room=await prisma.room.findUnique({where:{id:resolvedRoomId}});
         if(!room){
-          console.log(`[join_room] Room ${roomId} not found, creating...`);
-          room=await prisma.room.create({data:{id:roomId,roomCode:"MAIN",status:"WAITING"}});
+          room=await prisma.room.create({data:{id:resolvedRoomId,roomCode:"MAIN",status:"WAITING"}});
         }
-        if(room.status==="PLAYING"){
-          const activePlayers=await getActivePlayersByUser(roomId);
-          if(activePlayers.length===0){
-            room=await prisma.room.update({where:{id:roomId},data:{status:"WAITING",turnPlayerIdx:0,currentTurn:1}});
-            gameLogic.currentTurnUserByRoom.delete(roomId);
-            gameLogic.roomTurnOrder.delete(roomId);
-            market.clearTradeLock(roomId);
-            gameLogic.actionWindowByRoom.delete(roomId);
-            gameLogic.turnStateByRoom.delete(roomId);
-            resetWarState();
-          }
-        }
-        const lobbyState=getLobbyState(roomId);
-        // 인원 제한 체크 (최대 4명, 이미 있는 유저는 제외)
+        const lobbyState=getLobbyState(resolvedRoomId);
         const MAX_PLAYERS=4;
         if(!lobbyState.players.has(sessionUserId)&&lobbyState.players.size>=MAX_PLAYERS){
-          socket.emit("join_error",{message:`방이 가득 찼습니다 (최대 ${MAX_PLAYERS}명)`});
-          console.log(`[join_room] Room ${roomId} is full (${lobbyState.players.size}/${MAX_PLAYERS})`);
+          socket.emit("join_error",{message:`Room is full (${MAX_PLAYERS} max)`});
           return;
         }
         if(room.status==="ENDED"&&lobbyState.players.size===0){
-          room=await prisma.room.update({where:{id:roomId},data:{status:"WAITING",turnPlayerIdx:0,currentTurn:1}});
-          gameLogic.currentTurnUserByRoom.delete(roomId);
-          gameLogic.roomTurnOrder.delete(roomId);
-          market.clearTradeLock(roomId);
-          gameLogic.actionWindowByRoom.delete(roomId);
-          gameLogic.turnStateByRoom.delete(roomId);
+          room=await prisma.room.update({where:{id:resolvedRoomId},data:{status:"WAITING",turnPlayerIdx:0,currentTurn:1}});
+          gameLogic.currentTurnUserByRoom.delete(resolvedRoomId);
+          gameLogic.roomTurnOrder.delete(resolvedRoomId);
+          gameLogic.actionWindowByRoom.delete(resolvedRoomId);
+          gameLogic.turnStateByRoom.delete(resolvedRoomId);
+          market.clearTradeLock(resolvedRoomId);
+          rollingUserByRoom.delete(resolvedRoomId);
+          orderPickingByRoom.delete(resolvedRoomId);
           resetWarState();
         }
         const user=await prisma.user.findUnique({where:{id:sessionUserId}});
-        let player=await prisma.player.findFirst({where:{roomId,userId:sessionUserId},orderBy:{id:"desc"},include:{assets:true}});
+        let player=await prisma.player.findFirst({where:{roomId:resolvedRoomId,userId:sessionUserId},orderBy:{id:"desc"},include:{assets:true}});
         if(!player){
           player=await prisma.player.create({
             data:{
-              roomId,
+              roomId:resolvedRoomId,
               userId:sessionUserId,
               socketId:socket.id,
               cash:gameLogic.INITIAL_CASH,
@@ -177,33 +192,34 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           player=await prisma.player.update({where:{id:player.id},data:{character:null},include:{assets:true}});
         }
         if(room.status==="PLAYING"){
-          await syncLobbyPlayers(roomId);
-          if(!gameLogic.roomTurnOrder.get(roomId)){
-            const activePlayers=await getActivePlayersByUser(roomId);
+          await syncLobbyPlayers(resolvedRoomId);
+          if(!gameLogic.roomTurnOrder.get(resolvedRoomId)){
+            const activePlayers=await getActivePlayersByUser(resolvedRoomId);
             const fallbackOrder=activePlayers.slice().sort((a,b)=>a.id-b.id).map((p)=>p.id);
-            if(fallbackOrder.length)gameLogic.roomTurnOrder.set(roomId,fallbackOrder);
+            if(fallbackOrder.length)gameLogic.roomTurnOrder.set(resolvedRoomId,fallbackOrder);
           }
         }
-        socket.join(roomId);
-        socketUserMap.set(socket.id,{roomId,userId:sessionUserId});
-        const lobby=getLobbyState(roomId);
+        socket.join(resolvedRoomId);
+        socketUserMap.set(socket.id,{roomId:resolvedRoomId,userId:sessionUserId});
+        const lobby=getLobbyState(resolvedRoomId);
         lobby.players.set(sessionUserId,{userId:sessionUserId,nickname:user?.nickname||`Player${sessionUserId}`,playerId:player.id,character:player.character});
         if(!lobby.hostUserId)lobby.hostUserId=sessionUserId;
-        const turnPlayerId=await prisma.$transaction(async(tx)=>gameLogic.getTurnPlayerId(tx,roomId));
-        const marketData=await prisma.$transaction(async(tx)=>market.getOrCreateMarket(tx,roomId));
-        const lobbyPayload=buildLobbyPayload(roomId);
-        console.log(`[join_room] User ${sessionUserId} joined room ${roomId}. Total players: ${lobbyPayload.players.length}`);
-        console.log(`[join_room] Players in room:`,lobbyPayload.players.map(p=>`${p.nickname}(${p.userId})`).join(", "));
-        socket.emit("join_success",{roomId,message:"Join success",player,turnPlayerId,war:gameLogic.getWarPayload(),roomStatus:room.status,lobby:lobbyPayload,currentTurn:gameLogic.currentTurnUserByRoom.get(roomId)||null});
+        if(room.status==="PLAYING"){
+          await ensureCurrentTurnUser(resolvedRoomId);
+        }
+        const turnPlayerId=await prisma.$transaction(async(tx)=>gameLogic.getTurnPlayerId(tx,resolvedRoomId));
+        const marketData=await prisma.$transaction(async(tx)=>market.getOrCreateMarket(tx,resolvedRoomId));
+        const lobbyPayload=buildLobbyPayload(resolvedRoomId);
+        socket.emit("join_success",{roomId:resolvedRoomId,message:"Join success",player,turnPlayerId,war:gameLogic.getWarPayload(),roomStatus:room.status,lobby:lobbyPayload,currentTurn:gameLogic.currentTurnUserByRoom.get(resolvedRoomId)||null});
         socket.emit("market_update",{samsung:marketData.priceSamsung,tesla:marketData.priceTesla,lockheed:marketData.priceLockheed,gold:marketData.priceGold,bitcoin:marketData.priceBtc,prevSamsung:marketData.prevSamsung,prevTesla:marketData.prevTesla,prevLockheed:marketData.prevLockheed,prevGold:marketData.prevGold,prevBtc:marketData.prevBtc});
         socket.emit("war_state",gameLogic.getWarPayload());
-        io.to(roomId).emit("lobby_update",lobbyPayload);
+        io.to(resolvedRoomId).emit("lobby_update",lobbyPayload);
         await gameLogic.emitAssetUpdate(player.id);
         if(room.status==="PLAYING"){
-          const resumePayload=await buildResumePayload(roomId);
+          const resumePayload=await buildResumePayload(resolvedRoomId);
           socket.emit("game_start",resumePayload);
         }
-      }catch(e){
+      }catch(err){
         socket.emit("join_error",{message:"Failed to join room"});
       }
     });
@@ -223,12 +239,230 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         else lobby.readyUserIds.delete(info.userId);
         if(player){
           const entry=lobby.players.get(info.userId);
-          if(entry)entry.character=player.character||null;
+          if(entry){
+            entry.character=player.character||null;
+            entry.playerId=player.id;
+          }
           if(player.character)io.to(info.roomId).emit("character_update",{playerId:player.id,userId:info.userId,character:player.character});
         }
-        console.log(`[set_ready] User ${info.userId} ready: ${isReady}`);
         io.to(info.roomId).emit("lobby_update",buildLobbyPayload(info.roomId));
-      }catch(e){}
+      }catch(err){}
+    });
+
+    socket.on("start_game",async()=>{
+      try{
+        const info=socketUserMap.get(socket.id);
+        if(!info){
+          socket.emit("start_error",{message:"Room not joined"});
+          return;
+        }
+        const roomId=info.roomId;
+        const room=await prisma.room.findUnique({where:{id:roomId}});
+        if(!room){
+          socket.emit("start_error",{message:"Room not found"});
+          return;
+        }
+        if(room.status==="PLAYING"){
+          socket.emit("start_error",{message:"Game already started"});
+          return;
+        }
+        if(orderPickingByRoom.has(roomId)){
+          socket.emit("start_error",{message:"Order picking already started"});
+          return;
+        }
+        const lobby=await syncLobbyPlayers(roomId);
+        if(lobby.hostUserId!==info.userId){
+          socket.emit("start_error",{message:"Only the host can start"});
+          return;
+        }
+        const activePlayers=await getActivePlayersByUser(roomId);
+        if(activePlayers.length<2){
+          socket.emit("start_error",{message:"At least 2 players are required"});
+          return;
+        }
+        const users=await prisma.user.findMany({where:{id:{in:activePlayers.map((p)=>p.userId)}},select:{id:true,nickname:true}});
+        const nicknameByUser=new Map(users.map((u)=>[u.id,u.nickname]));
+        activePlayers.forEach((p)=>{
+          const entry=lobby.players.get(p.userId);
+          if(entry){
+            entry.playerId=p.id;
+            entry.character=p.character||null;
+            entry.nickname=entry.nickname||nicknameByUser.get(p.userId)||`Player${p.userId}`;
+          }else{
+            lobby.players.set(p.userId,{
+              userId:p.userId,
+              nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`,
+              playerId:p.id,
+              character:p.character||null
+            });
+          }
+        });
+        const lobbyPayload=buildLobbyPayload(roomId);
+        if(lobbyPayload.players.length<2||!lobbyPayload.allReady){
+          socket.emit("start_error",{message:"All players must be ready"});
+          return;
+        }
+        if(activePlayers.some((p)=>!p.character)){
+          socket.emit("start_error",{message:"All players must select a character"});
+          return;
+        }
+        const availableCards=Array.from({length:activePlayers.length},(_,i)=>i+1);
+        orderPickingByRoom.set(roomId,{
+          availableCards,
+          picks:new Map(),
+          players:activePlayers.map((p)=>({
+            userId:p.userId,
+            playerId:p.id,
+            nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`,
+            character:p.character||null
+          }))
+        });
+        io.to(roomId).emit("order_picking_start",{availableCards});
+      }catch(err){
+        socket.emit("start_error",{message:"Failed to start game"});
+      }
+    });
+
+    socket.on("pick_order_card",async(cardNumber)=>{
+      try{
+        const info=socketUserMap.get(socket.id);
+        if(!info){
+          socket.emit("pick_error",{message:"Room not joined"});
+          return;
+        }
+        const roomId=info.roomId;
+        const orderState=orderPickingByRoom.get(roomId);
+        if(!orderState){
+          socket.emit("pick_error",{message:"Order picking not active"});
+          return;
+        }
+        const pick=Number(cardNumber);
+        if(!Number.isInteger(pick)){
+          socket.emit("pick_error",{message:"Invalid card"});
+          return;
+        }
+        if(!orderState.availableCards.includes(pick)){
+          socket.emit("pick_error",{message:"Invalid card"});
+          return;
+        }
+        if(orderState.picks.has(info.userId)){
+          socket.emit("pick_error",{message:"Already picked"});
+          return;
+        }
+        if(Array.from(orderState.picks.values()).includes(pick)){
+          socket.emit("pick_error",{message:"Card already taken"});
+          return;
+        }
+        orderState.picks.set(info.userId,pick);
+        const pickedCards=Array.from(orderState.picks.values());
+        io.to(roomId).emit("order_card_picked",{userId:info.userId,cardNumber:pick,pickedCards});
+
+        if(orderState.picks.size===orderState.players.length){
+          const pickByUser=new Map(orderState.picks);
+          const ordered=orderState.players
+            .map((p)=>({
+              ...p,
+              cardNumber:pickByUser.get(p.userId)
+            }))
+            .filter((p)=>Number.isInteger(p.cardNumber))
+            .sort((a,b)=>a.cardNumber-b.cardNumber);
+          const orderResults=ordered.map((p,idx)=>({
+            userId:p.userId,
+            playerId:p.playerId,
+            cardNumber:p.cardNumber,
+            turnOrder:idx+1,
+            nickname:p.nickname
+          }));
+          const turnOrderPlayerIds=ordered.map((p)=>p.playerId);
+          gameLogic.roomTurnOrder.set(roomId,turnOrderPlayerIds);
+          const firstUserId=ordered[0]?.userId||null;
+          if(firstUserId)gameLogic.currentTurnUserByRoom.set(roomId,firstUserId);
+          if(firstUserId)gameLogic.turnStateByRoom.set(roomId,{userId:firstUserId,rolled:false,extraRoll:false});
+          gameLogic.actionWindowByRoom.delete(roomId);
+          market.clearTradeLock(roomId);
+
+          await prisma.$transaction(async(tx)=>{
+            await tx.room.update({where:{id:roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1,maxTurn:10}});
+            await market.resetMarketDefaults(tx,roomId);
+          });
+
+          io.to(roomId).emit("order_picking_complete",{orderResults});
+          orderPickingByRoom.delete(roomId);
+
+          setTimeout(()=>{
+            void (async()=>{
+              try{
+                const payload=await buildStartPayload(roomId,turnOrderPlayerIds);
+                io.to(roomId).emit("game_start",payload);
+                io.to(roomId).emit("lobby_update",buildLobbyPayload(roomId));
+              }catch(err){
+                io.to(roomId).emit("start_error",{message:"Failed to start game"});
+              }
+            })();
+          },1200);
+        }
+      }catch(err){
+        socket.emit("pick_error",{message:"Failed to pick card"});
+      }
+    });
+
+    socket.on("roll_dice",async()=>{
+      try{
+        const userId=socket.user?.id;
+        if(!userId){
+          socket.emit("roll_error",{message:"Login session expired"});
+          return;
+        }
+        const info=socketUserMap.get(socket.id);
+        if(!info){
+          socket.emit("roll_error",{message:"Room not joined"});
+          return;
+        }
+        const rollingUserId=rollingUserByRoom.get(info.roomId);
+        if(rollingUserId&&rollingUserId!==userId){
+          socket.emit("roll_error",{message:"Another player is rolling"});
+          return;
+        }
+        if(rollingUserId===userId){
+          socket.emit("roll_error",{message:"Already rolling"});
+          return;
+        }
+        const result=await gameLogic.rollDiceForUser({userId});
+        if(result.turnUserId)gameLogic.currentTurnUserByRoom.set(result.roomId,result.turnUserId);
+        rollingUserByRoom.set(info.roomId,userId);
+        io.to(info.roomId).emit("dice_rolling_started",{userId});
+        setTimeout(()=>{
+          try{
+            io.to(result.roomId).emit("dice_rolled",{userId,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,player:result.player,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
+            io.to(result.roomId).emit("playerMove",{userId,playerId:result.player.id,character:result.player.character,oldLocation:result.oldLocation,newLocation:result.newLocation,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
+            if(result.cardEvent){
+              io.to(result.roomId).emit("drawCard",result.cardEvent);
+            }
+            if(result.market){
+              io.to(result.roomId).emit("market_update",{samsung:result.market.priceSamsung,tesla:result.market.priceTesla,lockheed:result.market.priceLockheed,gold:result.market.priceGold,bitcoin:result.market.priceBtc,prevSamsung:result.market.prevSamsung,prevTesla:result.market.prevTesla,prevLockheed:result.market.prevLockheed,prevGold:result.market.prevGold,prevBtc:result.market.prevBtc});
+            }
+            if(result.war){
+              io.to(result.roomId).emit("war_state",result.war);
+              if(result.warStarted)io.to(result.roomId).emit("war_start",result.war);
+              if(result.warEnded)io.to(result.roomId).emit("war_end",result.war);
+            }
+            gameLogic.emitAssetUpdate(result.player.id);
+            if(result.tollOwnerId)gameLogic.emitAssetUpdate(result.tollOwnerId);
+          }catch(err){
+            if(rollingUserByRoom.get(info.roomId)===userId){
+              rollingUserByRoom.delete(info.roomId);
+              io.to(info.roomId).emit("dice_roll_cancelled",{userId,reason:"EMIT_FAILED"});
+            }
+            socket.emit("roll_error",{message:"Failed to broadcast dice result"});
+            return;
+          }
+          if(rollingUserByRoom.get(info.roomId)===userId){
+            rollingUserByRoom.delete(info.roomId);
+          }
+        },800);
+      }catch(err){
+        socket.emit("roll_error",{message:err?.message||"Failed to roll dice"});
+      }
     });
 
     socket.on("end_turn",async()=>{
@@ -243,287 +477,103 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
           socket.emit("turn_error",{message:"Room not joined"});
           return;
         }
-        const currentTurn=gameLogic.currentTurnUserByRoom.get(info.roomId);
-        if(currentTurn&&currentTurn!==userId){
+        if(rollingUserByRoom.get(info.roomId)){
+          socket.emit("turn_error",{message:"Dice is still rolling"});
+          return;
+        }
+        const currentTurnUserId=await ensureCurrentTurnUser(info.roomId);
+        if(!currentTurnUserId||currentTurnUserId!==userId){
           socket.emit("turn_error",{message:"Not your turn"});
           return;
         }
-        const room=await prisma.room.findUnique({where:{id:info.roomId}});
-        if(!room)throw new Error("Room not found");
-        if(room.status!=="PLAYING")throw new Error("Game not started");
         const turnState=gameLogic.turnStateByRoom.get(info.roomId);
-        if(!turnState||turnState.userId!==userId||!turnState.rolled||turnState.extraRoll)throw new Error("Roll extra turn before ending");
-        const order=gameLogic.roomTurnOrder.get(info.roomId);
-        const players=order&&order.length?order:(await getActivePlayersByUser(info.roomId)).map((p)=>p.id);
-        if(players.length===0)throw new Error("Player count is zero");
-        const nextIdx=(room.turnPlayerIdx+1)%players.length;
-        await prisma.player.updateMany({where:{roomId:info.roomId,userId},data:{extraTurnUsed:false}});
-        const nextTurnNumber=(room.currentTurn||1)+1;
-        if(nextTurnNumber>(room.maxTurn||10)){
-          const lobbyPlayers=getLobbyState(info.roomId).players;
-          const activeUserIds=new Set(lobbyPlayers?Array.from(lobbyPlayers.keys()):[]);
-          const latestPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
-          const activePlayers=activeUserIds.size?latestPlayers.filter((p)=>activeUserIds.has(p.userId)):latestPlayers;
-          const rankings=[];
-          const users=await prisma.user.findMany({where:{id:{in:activePlayers.map((p)=>p.userId)}},select:{id:true,nickname:true}});
-          const nickMap=new Map(users.map((u)=>[u.id,u.nickname]));
-          for(const p of activePlayers){
-            const totals=await prisma.$transaction(async(tx)=>gameLogic.computeTotals(tx,p.id));
-            rankings.push({userId:p.userId,playerId:p.id,nickname:nickMap.get(p.userId)||`Player${p.userId}`,totalAsset:totals.totalAsset,cash:totals.player.cash});
-          }
-          rankings.sort((a,b)=>Number(b.totalAsset-a.totalAsset));
-          await prisma.room.update({where:{id:info.roomId},data:{status:"ENDED",currentTurn:nextTurnNumber}});
-          gameLogic.currentTurnUserByRoom.delete(info.roomId);
-          market.clearTradeLock(info.roomId);
-          gameLogic.actionWindowByRoom.delete(info.roomId);
-          gameLogic.turnStateByRoom.delete(info.roomId);
-          resetWarState();
-          io.to(info.roomId).emit("game_end",{rankings,maxTurn:room.maxTurn||10});
+        if(!turnState||!turnState.rolled){
+          socket.emit("turn_error",{message:"Roll before ending"});
           return;
         }
-        await prisma.room.update({where:{id:info.roomId},data:{turnPlayerIdx:nextIdx,currentTurn:nextTurnNumber}});
-        const nextTurnPlayerId=await prisma.$transaction(async(tx)=>gameLogic.getTurnPlayerId(tx,info.roomId));
-        let nextTurnUserId=null;
-        if(nextTurnPlayerId){
-          const p=await prisma.player.findUnique({where:{id:nextTurnPlayerId}});
-          nextTurnUserId=p?.userId||null;
+        if(turnState.extraRoll){
+          socket.emit("turn_error",{message:"Extra turn available"});
+          return;
         }
-        gameLogic.currentTurnUserByRoom.set(info.roomId,nextTurnUserId);
-        market.clearTradeLock(info.roomId);
         gameLogic.actionWindowByRoom.delete(info.roomId);
-        gameLogic.turnStateByRoom.set(info.roomId,{userId:nextTurnUserId,rolled:false,extraRoll:false});
+        market.clearTradeLock(info.roomId);
+        await prisma.player.updateMany({where:{roomId:info.roomId,userId},data:{extraTurnUsed:false}});
+
+        const turnResult=await prisma.$transaction(async(tx)=>{
+          const room=await tx.room.findUnique({where:{id:info.roomId}});
+          if(!room)throw new Error("Room not found");
+          const allPlayers=await gameLogic.getLatestPlayersByUser(tx,info.roomId);
+          const activePlayers=allPlayers.filter((p)=>isActiveSocketId(p.socketId));
+          const players=activePlayers.length?activePlayers:allPlayers;
+          if(players.length===0)throw new Error("No players in room");
+          let turnOrder=gameLogic.roomTurnOrder.get(info.roomId);
+          const playerIds=players.map((p)=>p.id);
+          const playerIdSet=new Set(playerIds);
+          if(turnOrder&&turnOrder.length){
+            const filtered=turnOrder.filter((id)=>playerIdSet.has(id));
+            const filteredSet=new Set(filtered);
+            const missing=playerIds.filter((id)=>!filteredSet.has(id));
+            turnOrder=missing.length?filtered.concat(missing):filtered;
+          }
+          if(!turnOrder||turnOrder.length===0){
+            turnOrder=players.slice().sort((a,b)=>a.id-b.id).map((p)=>p.id);
+          }
+          gameLogic.roomTurnOrder.set(info.roomId,turnOrder);
+          const nextIndex=(room.turnPlayerIdx+1)%turnOrder.length;
+          const wrapped=nextIndex===0;
+          const nextTurn=wrapped?room.currentTurn+1:room.currentTurn;
+          const reachedEnd=nextTurn>room.maxTurn;
+          const updateData=reachedEnd?{status:"ENDED"}:{status:"PLAYING",turnPlayerIdx:nextIndex,currentTurn:nextTurn};
+          await tx.room.update({where:{id:info.roomId},data:updateData});
+          const nextPlayerId=turnOrder[nextIndex];
+          const nextPlayer=await tx.player.findUnique({where:{id:nextPlayerId},select:{userId:true}});
+          return{room,turnOrder,nextIndex,wrapped,nextTurn,reachedEnd,nextPlayerId,nextUserId:nextPlayer?.userId||null};
+        });
+
+        let warEnded=false;
         if(gameLogic.warState.active){
-          gameLogic.warState.turnsLeft-=1;
+          gameLogic.warState.turnsLeft=Math.max(0,gameLogic.warState.turnsLeft-1);
           if(gameLogic.warState.turnsLeft<=0){
-            gameLogic.warState.active=false;
-            gameLogic.warState.recoveryActive=true;
-          }
-        }else if(gameLogic.warState.recoveryActive){
-          gameLogic.warState.recoveryLine=Math.min(1,Math.round((gameLogic.warState.recoveryLine+0.1)*100)/100);
-          gameLogic.warState.recoveryNode=Math.min(1,Math.round((gameLogic.warState.recoveryNode+0.1)*100)/100);
-          if(gameLogic.warState.recoveryLine>=1&&gameLogic.warState.recoveryNode>=1){
-            gameLogic.warState.recoveryActive=false;
-            gameLogic.warState.warLine=null;
-            gameLogic.warState.warNode=null;
+            resetWarState();
+            warEnded=true;
           }
         }
-        io.to(info.roomId).emit("turn_update",{currentTurn:nextTurnUserId,turnPlayerId:nextTurnPlayerId,war:gameLogic.getWarPayload()});
-      }catch(e){
-        socket.emit("turn_error",{message:e?.message||"Failed to end turn"});
-      }
-    });
+        const warPayload=gameLogic.getWarPayload();
+        if(warEnded){
+          io.to(info.roomId).emit("war_end",warPayload);
+        }
 
-    socket.on("start_game",async()=>{
-      try{
-        const info=socketUserMap.get(socket.id);
-        if(!info){
-          socket.emit("start_error",{message:"Room not joined"});
-          return;
-        }
-        const lobby=getLobbyState(info.roomId);
-        if(lobby.hostUserId!==info.userId){
-          socket.emit("start_error",{message:"Only host can start"});
-          return;
-        }
-        const payload=buildLobbyPayload(info.roomId);
-        if(!payload.allReady){
-          socket.emit("start_error",{message:"All players must be ready"});
-          return;
-        }
-        const lobbyPlayers=getLobbyState(info.roomId).players;
-        const activeUserIds=new Set(lobbyPlayers?Array.from(lobbyPlayers.keys()):[]);
-        const allPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
-        const players=activeUserIds.size?allPlayers.filter((p)=>activeUserIds.has(p.userId)):allPlayers;
-        if(players.length===0){
-          socket.emit("start_error",{message:"No players"});
-          return;
-        }
-        if(players.some((p)=>!p.character)){
-          socket.emit("start_error",{message:"All players must select a character"});
+        if(turnResult.reachedEnd){
+          const latestPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
+          const rankings=latestPlayers
+            .slice()
+            .sort((a,b)=>{
+              if(a.totalAsset===b.totalAsset)return 0;
+              return a.totalAsset>b.totalAsset?-1:1;
+            })
+            .map((p)=>({playerId:p.id,totalAsset:p.totalAsset}));
+          io.to(info.roomId).emit("game_end",{rankings,maxTurn:turnResult.room.maxTurn});
           return;
         }
 
-        // 순서 뽑기 단계 시작 - 1,2,3,4 카드 준비
-        const availableCards=shuffleArray([1,2,3,4].slice(0,players.length));
-        orderPickingByRoom.set(info.roomId,{
-          cards:availableCards,
-          picks:new Map(),
-          players:players.map((p)=>({playerId:p.id,userId:p.userId}))
-        });
-
-        console.log(`[System] Order picking started for room ${info.roomId}. Cards: [${availableCards.join(", ")}]`);
-        io.to(info.roomId).emit("order_picking_start",{availableCards,playerCount:players.length});
-      }catch(e){
-        socket.emit("start_error",{message:"Failed to start game"});
-      }
-    });
-
-    // 순서 카드 선택
-    socket.on("pick_order_card",async(cardNumber)=>{
-      try{
-        const info=socketUserMap.get(socket.id);
-        if(!info)return;
-        const userId=socket.user?.id;
-        if(!userId)return;
-
-        const orderState=orderPickingByRoom.get(info.roomId);
-        if(!orderState){
-          socket.emit("pick_error",{message:"순서 뽑기가 진행중이 아닙니다."});
-          return;
+        if(turnResult.nextUserId){
+          gameLogic.currentTurnUserByRoom.set(info.roomId,turnResult.nextUserId);
+          gameLogic.turnStateByRoom.set(info.roomId,{userId:turnResult.nextUserId,rolled:false,extraRoll:false});
+        }else{
+          gameLogic.currentTurnUserByRoom.delete(info.roomId);
+          gameLogic.turnStateByRoom.delete(info.roomId);
         }
 
-        // 이미 선택했는지 확인
-        if(orderState.picks.has(userId)){
-          socket.emit("pick_error",{message:"이미 카드를 선택했습니다."});
-          return;
-        }
-
-        // 유효한 카드인지 확인
-        const cardNum=Number(cardNumber);
-        if(!orderState.cards.includes(cardNum)){
-          socket.emit("pick_error",{message:"유효하지 않은 카드입니다."});
-          return;
-        }
-
-        // 이미 다른 사람이 선택한 카드인지 확인
-        const pickedCards=Array.from(orderState.picks.values());
-        if(pickedCards.includes(cardNum)){
-          socket.emit("pick_error",{message:"이미 선택된 카드입니다."});
-          return;
-        }
-
-        // 카드 선택 저장
-        orderState.picks.set(userId,cardNum);
-        console.log(`[Order Pick] User ${userId} picked card ${cardNum}`);
-
-        // 모든 클라이언트에게 선택 상황 알림
-        io.to(info.roomId).emit("order_card_picked",{
-          userId,
-          cardNumber:cardNum,
-          pickedCards:Array.from(orderState.picks.values()),
-          remainingCards:orderState.cards.filter((c)=>!Array.from(orderState.picks.values()).includes(c))
-        });
-
-        // 모든 플레이어가 선택했는지 확인
-        if(orderState.picks.size===orderState.players.length){
-          // 순서 결정 및 게임 시작
-          const sortedPlayers=[...orderState.players].sort((a,b)=>{
-            const aCard=orderState.picks.get(a.userId)||99;
-            const bCard=orderState.picks.get(b.userId)||99;
-            return aCard-bCard;
-          });
-
-          const orderPlayerIds=sortedPlayers.map((p)=>p.playerId);
-          const orderUserIds=sortedPlayers.map((p)=>p.userId);
-
-          gameLogic.roomTurnOrder.set(info.roomId,orderPlayerIds);
-          const currentTurn=orderUserIds[0]||null;
-          gameLogic.currentTurnUserByRoom.set(info.roomId,currentTurn);
-          market.clearTradeLock(info.roomId);
-          gameLogic.actionWindowByRoom.delete(info.roomId);
-          gameLogic.turnStateByRoom.set(info.roomId,{userId:currentTurn,rolled:false,extraRoll:false});
-
-          await prisma.room.update({where:{id:info.roomId},data:{status:"PLAYING",turnPlayerIdx:0,currentTurn:1}});
-          await prisma.$transaction(async(tx)=>market.resetMarketDefaults(tx,info.roomId));
-
-          const lobbyInfo=buildLobbyPayload(info.roomId);
-          const nicknameByUser=new Map(lobbyInfo.players.map((p)=>[p.userId,p.nickname]));
-          const allPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
-          const activeUserIds=new Set(lobbyInfo.players.map((p)=>p.userId));
-          const players=allPlayers.filter((p)=>activeUserIds.has(p.userId));
-
-          const playersPayload=players.map((p)=>({
-            playerId:p.id,
-            userId:p.userId,
-            nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`,
-            character:p.character||null,
-            location:typeof p.location==="number"?p.location:0
-          }));
-
-          // 순서 결과를 먼저 보여주고
-          const orderResults=sortedPlayers.map((p,idx)=>({
-            userId:p.userId,
-            playerId:p.playerId,
-            cardNumber:orderState.picks.get(p.userId),
-            turnOrder:idx+1,
-            nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`
-          }));
-
-          io.to(info.roomId).emit("order_picking_complete",{orderResults});
-
-          // 잠시 후 게임 시작
-          setTimeout(()=>{
-            const turnPlayerId=orderPlayerIds[0]||null;
-            console.log(`[System] Game Started. Turn Order: [${orderUserIds.join(", ")}]`);
-            io.to(info.roomId).emit("game_start",{turnPlayerId,currentTurn,turnOrder:orderUserIds,turnOrderPlayerIds:orderPlayerIds,players:playersPayload});
-            io.to(info.roomId).emit("lobby_update",buildLobbyPayload(info.roomId));
-            orderPickingByRoom.delete(info.roomId);
-          },3000);
-        }
-      }catch(e){
-        socket.emit("pick_error",{message:"카드 선택 실패"});
-      }
-    });
-
-    socket.on("roll_dice",async()=>{
-      console.log("roll_dice received",socket.id);
-      try{
-        const userId=socket.user?.id;
-        if(!userId){
-          socket.emit("roll_error",{message:"Login session expired"});
-          console.log("emit failed: login session expired");
-          return;
-        }
-        const info=socketUserMap.get(socket.id);
-        if(!info){
-          socket.emit("roll_error",{message:"Room not joined"});
-          return;
-        }
-        // 먼저 주사위 굴리기 시작을 모든 클라이언트에게 알림 (관전자도 애니메이션 볼 수 있게)
-        io.to(info.roomId).emit("dice_rolling_started",{userId});
-
-        const result=await gameLogic.rollDiceForUser({userId});
-        const userRecord=await prisma.user.findUnique({where:{id:userId},select:{nickname:true}});
-        const userName=userRecord?.nickname||"Player";
-        console.log(`[${userName}] moved ${result.oldLocation} -> ${result.newLocation}`);
-
-        // 약간의 딜레이 후 결과 전송 (애니메이션 시간 확보)
-        setTimeout(()=>{
-          io.to(result.roomId).emit("dice_rolled",{userId,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,player:result.player,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
-          io.to(result.roomId).emit("playerMove",{userId,playerId:result.player.id,character:result.player.character,oldLocation:result.oldLocation,newLocation:result.newLocation,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
-          if(result.cardEvent){
-            io.to(result.roomId).emit("drawCard",result.cardEvent);
-          }
-          if(result.market){
-            io.to(result.roomId).emit("market_update",{samsung:result.market.priceSamsung,tesla:result.market.priceTesla,lockheed:result.market.priceLockheed,gold:result.market.priceGold,bitcoin:result.market.priceBtc,prevSamsung:result.market.prevSamsung,prevTesla:result.market.prevTesla,prevLockheed:result.market.prevLockheed,prevGold:result.market.prevGold,prevBtc:result.market.prevBtc});
-          }
-          if(result.war){
-            io.to(result.roomId).emit("war_state",result.war);
-            if(result.warStarted){
-              io.to(result.roomId).emit("war_start",result.war);
-            }
-            if(result.warEnded){
-              io.to(result.roomId).emit("war_end",result.war);
-            }
-          }
-          gameLogic.emitAssetUpdate(result.player.id);
-          if(result.tollOwnerId)gameLogic.emitAssetUpdate(result.tollOwnerId);
-        },800);
-        console.log("emit success: true");
-      }catch(e){
-        socket.emit("roll_error",{message:e?.message||"Failed to roll dice"});
-        console.log("emit failed",e?.message||e);
+        io.to(info.roomId).emit("turn_update",{turnPlayerId:turnResult.nextPlayerId,currentTurn:turnResult.nextUserId,war:warPayload});
+      }catch(err){
+        socket.emit("turn_error",{message:err?.message||"Failed to end turn"});
       }
     });
 
     socket.on("disconnect",async()=>{
-      // DB에 socketId가 남아있으면 REST API에서 "active"로 오인해서
-      // 캐릭터 중복 체크가 잘못 동작할 수 있어 disconnect 시 정리합니다.
       try{
         await prisma.player.updateMany({where:{socketId:socket.id},data:{socketId:null}});
-      }catch(e){
-        console.log("[disconnect] Failed to clear socketId: "+(e?.message||e));
-      }
+      }catch(err){}
 
       const info=socketUserMap.get(socket.id);
       if(!info)return;
@@ -535,6 +585,9 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         const nextHost=lobby.players.keys().next();
         lobby.hostUserId=nextHost.done?null:nextHost.value;
       }
+      if(rollingUserByRoom.get(info.roomId)===info.userId){
+        rollingUserByRoom.delete(info.roomId);
+      }
       if(lobby.players.size===0){
         lobbyStateByRoom.delete(info.roomId);
         gameLogic.roomTurnOrder.delete(info.roomId);
@@ -542,6 +595,8 @@ function initSocketHandlers({io,prisma,auth,gameLogic,market}){
         gameLogic.turnStateByRoom.delete(info.roomId);
         gameLogic.actionWindowByRoom.delete(info.roomId);
         market.clearTradeLock(info.roomId);
+        rollingUserByRoom.delete(info.roomId);
+        orderPickingByRoom.delete(info.roomId);
         resetWarState();
         return;
       }

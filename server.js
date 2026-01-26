@@ -58,8 +58,41 @@ initSocketHandlers({io,prisma,auth,gameLogic,market});
 
 async function initGame(){
   try{
-    const room=await prisma.room.findUnique({where:{id:1}});
-    if(!room)await prisma.room.create({data:{id:1,roomCode:"DEMO",status:"WAITING"}});
+    await prisma.$transaction(async(tx)=>{
+      await tx.room.upsert({
+        where:{id:1},
+        update:{status:"WAITING",currentTurn:1,turnPlayerIdx:0,maxTurn:10},
+        create:{id:1,roomCode:"DEMO",status:"WAITING",currentTurn:1,turnPlayerIdx:0,maxTurn:10}
+      });
+
+      await tx.gameLand.updateMany({where:{roomId:1},data:{ownerId:null,isLandmark:false,hasWorldCup:false,purchasePrice:0}});
+
+      const players=await tx.player.findMany({where:{roomId:1},select:{id:true}});
+      const playerIds=players.map((p)=>p.id);
+      if(playerIds.length){
+        await tx.player.updateMany({
+          where:{roomId:1},
+          data:{
+            socketId:null,
+            isReady:false,
+            order:0,
+            character:null,
+            cash:gameLogic.INITIAL_CASH,
+            totalAsset:gameLogic.INITIAL_CASH,
+            location:0,
+            isBankrupt:false,
+            isResting:false,
+            extraTurnUsed:false
+          }
+        });
+        await tx.playerAsset.updateMany({
+          where:{playerId:{in:playerIds}},
+          data:{samsung:0,tesla:0,lockheed:0,gold:0,bitcoin:0}
+        });
+      }
+
+      await market.resetMarketDefaults(tx,1);
+    });
   }catch(e){
     console.error(e);
   }
