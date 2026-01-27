@@ -160,6 +160,8 @@ function createGameLogic({ prisma, io, market }) {
       `You are a game newsroom editor.`,
       `Write a free-form headline and a 2-3 sentence summary in locale "${safeLocale}".`,
       `Never mention user names; refer to players by character names (e.g., TRUMP, LEE, MUSK, PUTIN).`,
+      `Game Mechanics: Players use a single die ranging from 1 to 9. Treat rolls of 7-9 as high-speed/lucky moves.`,
+      `Ensure player diversity. Do not default to the player with the most events; look for drama, underdogs, or interactions to vary the spotlight.`,
       `Call out surging/crashing stocks, real estate, or continents when present in the events.`,
       `If events mention World Cup hosting or Golden Key draws, weave them into the headline or summary.`,
       `Pick the most distinctive event for the headline; avoid generic market headlines unless market updates are the only notable events.`,
@@ -175,7 +177,7 @@ function createGameLogic({ prisma, io, market }) {
         role: "system",
         parts: [
           {
-            text: "Return ONLY valid JSON with keys headline and summary. No preface text, no markdown, no code fences. Do not mention user names; refer to players by character names only. Highlight surging/crashing assets, real estate, or continents when present. Write a free-form headline and a 2-3 sentence summary without fixed templates. If events mention World Cup hosting or Golden Key draws, weave them into the headline or summary. Pick the most distinctive event for the headline; avoid generic market headlines unless market updates are the only notable events. Avoid rigid templates, colon-separated lists, or formulaic phrasing.",
+            text: "Return ONLY valid JSON with keys headline and summary. No preface text, no markdown, no code fences. Do not mention user names; refer to players by character names only. Game Mechanics: Dice range is 1-9. Avoid bias towards the most active player; ensure diverse character spotlight. Highlight surging/crashing assets, real estate, or continents when present. Write a free-form headline and a 2-3 sentence summary without fixed templates. If events mention World Cup hosting or Golden Key draws, weave them into the headline or summary. Pick the most distinctive event for the headline; avoid generic market headlines unless market updates are the only notable events. Avoid rigid templates, colon-separated lists, or formulaic phrasing.",
           },
         ],
       },
