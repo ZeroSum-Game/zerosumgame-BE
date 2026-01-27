@@ -3,6 +3,163 @@
   const socketUserMap=new Map();
   const orderPickingByRoom=new Map();
   const rollingUserByRoom=new Map();
+  const minigameStateByRoom=new Map();
+  const minigameTimerByRoom=new Map();
+
+  const MINIGAME_INTRO_SECONDS=5;
+  const MINIGAME_TOTAL_SECONDS=20;
+  const MINIGAME_RESULT_SECONDS=5;
+  const MINIGAME_BASE_SECONDS=5;
+  const MINIGAME_MIN_SECONDS=2;
+
+  const MINIGAME_QUESTIONS=[
+    "박찬우","김명성","김지연","임태빈","배서연","이건","강예서",
+    "신원영","박성재","정재우","민동휘","임남중","박성준","이준엽",
+    "탁한진","최영운","정재원","안준영","박세윤","임유진","전하은"
+  ];
+
+  const CHOSUNG_LIST=["ㄱ","ㄲ","ㄴ","ㄷ","ㄸ","ㄹ","ㅁ","ㅂ","ㅃ","ㅅ","ㅆ","ㅇ","ㅈ","ㅉ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ"];
+  function getChosung(text){
+    if(!text) return "";
+    let out="";
+    for(const ch of String(text)){
+      const code=ch.charCodeAt(0);
+      if(code>=0xac00&&code<=0xd7a3){
+        const idx=Math.floor((code-0xac00)/588);
+        out+=CHOSUNG_LIST[idx]||"";
+      }else{
+        out+=ch;
+      }
+    }
+    return out;
+  }
+
+  function pickRandomName(namePool){
+    if(!namePool||namePool.length===0)return "";
+    return namePool[Math.floor(Math.random()*namePool.length)];
+  }
+
+  function computeMinigameTimeLimit(correctCount){
+    return Math.max(MINIGAME_MIN_SECONDS, MINIGAME_BASE_SECONDS - correctCount*0.7);
+  }
+
+  function buildMinigameRanking(state){
+    const ranked=[...state.players].sort((a,b)=>{
+      if(a.score===b.score)return 0;
+      return a.score>b.score?-1:1;
+    });
+    return ranked.map((p,idx)=>({
+      rank:idx+1,
+      userId:p.userId,
+      nickname:p.nickname,
+      score:p.score,
+      isDropped:p.isDropped
+    }));
+  }
+
+  function buildMinigamePayload(state){
+    if(!state) return null;
+    const ranking=buildMinigameRanking(state);
+    const winnerUserId=ranking[0]?.userId||null;
+    return {
+      phase: state.phase,
+      players: state.players.map(p=>({
+        userId:p.userId,
+        nickname:p.nickname,
+        score:p.score,
+        isDropped:p.isDropped
+      })),
+      currentChosung: state.currentChosung || "",
+      timeLeft: state.timeLeft,
+      timeLimit: state.timeLimit,
+      countdown: state.countdown,
+      introLeft: state.introLeft,
+      totalLeft: state.gameEndAt ? Math.max(0, Math.ceil((state.gameEndAt-Date.now())/1000)) : 0,
+      resultLeft: state.resultLeft || 0,
+      winners: state.winners||null,
+      ranking,
+      winnerUserId
+    };
+  }
+
+  function broadcastMinigame(roomId){
+    const state=minigameStateByRoom.get(roomId);
+    if(!state||!io) return;
+    io.to(roomId).emit("minigame_state",buildMinigamePayload(state));
+  }
+
+  function stopMinigameTimer(roomId){
+    const timer=minigameTimerByRoom.get(roomId);
+    if(timer){
+      clearInterval(timer);
+      minigameTimerByRoom.delete(roomId);
+    }
+  }
+
+  function endMinigame(roomId){
+    const state=minigameStateByRoom.get(roomId);
+    if(!state) return;
+    state.phase="RESULT";
+    const maxScore=Math.max(0,...state.players.map(p=>p.score||0));
+    const winners=state.players.filter(p=>p.score===maxScore);
+    state.winners=winners.map(p=>p.nickname);
+    state.resultLeft=MINIGAME_RESULT_SECONDS;
+    state.resultEndAt=Date.now()+MINIGAME_RESULT_SECONDS*1000;
+    broadcastMinigame(roomId);
+  }
+
+  function startMinigameLoop(roomId){
+    stopMinigameTimer(roomId);
+    const timer=setInterval(()=>{
+      const state=minigameStateByRoom.get(roomId);
+      if(!state) return;
+      const now=Date.now();
+      if(state.phase==="INTRO"){
+        state.introLeft=Math.max(0,(state.introLeft||0)-1);
+        if(state.introLeft<=0){
+          state.phase="GAME";
+          state.gameEndAt=now+MINIGAME_TOTAL_SECONDS*1000;
+          state.correctCount=state.correctCount||0;
+          state.timeLimit=computeMinigameTimeLimit(state.correctCount);
+          state.timeLeft=Math.ceil(state.timeLimit);
+          state.currentName=state.questionOrder[state.questionIndex]||pickRandomName(state.questionOrder);
+          state.currentChosung=getChosung(state.currentName);
+        }
+        broadcastMinigame(roomId);
+        return;
+      }
+      if(state.phase==="GAME"){
+        if(state.gameEndAt&&now>=state.gameEndAt){
+          endMinigame(roomId);
+          return;
+        }
+        const aliveCount=state.players.filter((p)=>!p.isDropped).length;
+        if(aliveCount<=1){
+          endMinigame(roomId);
+          return;
+        }
+        state.timeLeft=Math.max(0,(state.timeLeft||0)-1);
+        if(state.timeLeft<=0){
+          // timeout -> current active players are eliminated
+          state.players.forEach((p)=>{ if(!p.isDropped) p.isDropped=true; });
+          endMinigame(roomId);
+          return;
+        }
+        broadcastMinigame(roomId);
+        return;
+      }
+      if(state.phase==="RESULT"){
+        state.resultLeft=Math.max(0,(state.resultLeft||0)-1);
+        if(state.resultLeft<=0){
+          broadcastMinigame(roomId);
+          stopMinigameTimer(roomId);
+          return;
+        }
+        broadcastMinigame(roomId);
+      }
+    },1000);
+    minigameTimerByRoom.set(roomId,timer);
+  }
 
   function shuffleArray(items){
     const arr=items.slice();
@@ -68,6 +225,48 @@
   async function getActivePlayersByUser(roomId){
     const players=await gameLogic.getLatestPlayersByUser(prisma,roomId);
     return players.filter((p)=>isActiveSocketId(p.socketId));
+  }
+
+  async function buildMinigamePlayers(roomId){
+    const activePlayers=await getActivePlayersByUser(roomId);
+    const players=activePlayers.length?activePlayers:await gameLogic.getLatestPlayersByUser(prisma,roomId);
+    if(players.length===0)return [];
+    const users=await prisma.user.findMany({where:{id:{in:players.map((p)=>p.userId)}},select:{id:true,nickname:true}});
+    const nicknameByUser=new Map(users.map((u)=>[u.id,u.nickname]));
+    return players.map((p)=>({
+      userId:p.userId,
+      nickname:nicknameByUser.get(p.userId)||`Player${p.userId}`,
+      score:0,
+      isDropped:false
+    }));
+  }
+
+  async function createMinigameState(roomId){
+    const players=await buildMinigamePlayers(roomId);
+    if(players.length===0)return null;
+    const now=Date.now();
+    const questionOrder=shuffleArray(MINIGAME_QUESTIONS);
+    const state={
+      phase:"INTRO",
+      players,
+      countdown:0,
+      introLeft:MINIGAME_INTRO_SECONDS,
+      timeLimit:computeMinigameTimeLimit(0),
+      timeLeft:computeMinigameTimeLimit(0),
+      currentName:"",
+      currentChosung:"",
+      correctCount:0,
+      gameEndAt:null,
+      resultLeft:0,
+      resultEndAt:null,
+      winners:null,
+      questionOrder,
+      questionIndex:0
+    };
+    minigameStateByRoom.set(roomId,state);
+    startMinigameLoop(roomId);
+    broadcastMinigame(roomId);
+    return state;
   }
 
   async function syncLobbyPlayers(roomId){
@@ -174,8 +373,11 @@
           socket.emit("join_error",{message:`Room is full (${MAX_PLAYERS} max)`});
           return;
         }
+        // 방 리셋 조건: ENDED 상태이고 lobbyState가 비어있을 때만
         if(room.status==="ENDED"&&lobbyState.players.size===0){
           room=await prisma.room.update({where:{id:resolvedRoomId},data:{status:"WAITING",turnPlayerIdx:0,currentTurn:1}});
+          await prisma.gameLand.deleteMany({where:{roomId:resolvedRoomId}});
+          await prisma.player.deleteMany({where:{roomId:resolvedRoomId}});
           gameLogic.currentTurnUserByRoom.delete(resolvedRoomId);
           gameLogic.roomTurnOrder.delete(resolvedRoomId);
           gameLogic.actionWindowByRoom.delete(resolvedRoomId);
@@ -202,9 +404,7 @@
         }else{
           player=await prisma.player.update({where:{id:player.id},data:{socketId:socket.id},include:{assets:true}});
         }
-        if(room.status==="WAITING"&&player.character){
-          player=await prisma.player.update({where:{id:player.id},data:{character:null},include:{assets:true}});
-        }
+        // Do not clear character on refresh while waiting; keep existing selection.
         if(room.status==="WAITING"){
           lobbyState.readyUserIds.delete(sessionUserId);
         }
@@ -333,8 +533,7 @@
 
         // 순서 뽑기 단계 시작 - 카드 번호는 랜덤 배치
         const cardIds=Array.from({length:activePlayers.length},(_,i)=>i+1);
-        const cardNumbers=shuffleArray(cardIds.slice());
-        const cardValues=new Map(cardIds.map((id,idx)=>[id,cardNumbers[idx]]));
+        const cardValues=new Map(cardIds.map((id)=>[id,id]));
         const availableCards=shuffleArray(cardIds.slice());
         orderPickingByRoom.set(info.roomId,{
           cardIds,
@@ -351,6 +550,93 @@
         io.to(roomId).emit("order_picking_start",{availableCards});
       }catch(err){
         socket.emit("start_error",{message:"Failed to start game"});
+      }
+    });
+
+    socket.on("minigame_start",async()=>{
+      try{
+        const info=socketUserMap.get(socket.id);
+        if(!info){
+          socket.emit("minigame_error",{message:"Room not joined"});
+          return;
+        }
+        io.to(info.roomId).emit("minigame_start",{startedBy:info.userId});
+      }catch(err){
+        socket.emit("minigame_error",{message:"Failed to start minigame"});
+      }
+    });
+
+    socket.on("minigame_join",async()=>{
+      try{
+        const info=socketUserMap.get(socket.id);
+        if(!info){
+          socket.emit("minigame_error",{message:"Room not joined"});
+          return;
+        }
+        const roomId=info.roomId;
+        let state=minigameStateByRoom.get(roomId);
+        if(!state){
+          state=await createMinigameState(roomId);
+          if(!state){
+            socket.emit("minigame_error",{message:"No players available"});
+            return;
+          }
+          return;
+        }
+        if(state.phase==="RESULT"){
+          socket.emit("minigame_state",buildMinigamePayload(state));
+          return;
+        }
+        const exists=state.players.some((p)=>p.userId===info.userId);
+        if(!exists){
+          const user=await prisma.user.findUnique({where:{id:info.userId},select:{nickname:true}});
+          state.players.push({
+            userId:info.userId,
+            nickname:user?.nickname||`Player${info.userId}`,
+            score:0,
+            isDropped:false
+          });
+          broadcastMinigame(roomId);
+        }else{
+          socket.emit("minigame_state",buildMinigamePayload(state));
+        }
+      }catch(err){
+        socket.emit("minigame_error",{message:"Failed to join minigame"});
+      }
+    });
+
+    socket.on("minigame_answer",async(payload)=>{
+      try{
+        const info=socketUserMap.get(socket.id);
+        if(!info)return;
+        const roomId=info.roomId;
+        const state=minigameStateByRoom.get(roomId);
+        if(!state||state.phase!=="GAME")return;
+        const player=state.players.find((p)=>p.userId===info.userId);
+        if(!player||player.isDropped)return;
+        const answer=String(payload?.answer||"").trim();
+        if(!answer)return;
+        const answerChosung=getChosung(answer);
+        const isKnownName=MINIGAME_QUESTIONS.includes(answer);
+        if(answerChosung===state.currentChosung&&isKnownName){
+          player.score=(player.score||0)+1;
+          state.correctCount=(state.correctCount||0)+1;
+          state.timeLimit=computeMinigameTimeLimit(state.correctCount);
+          state.timeLeft=Math.ceil(state.timeLimit);
+          state.questionIndex=(state.questionIndex+1)%state.questionOrder.length;
+          state.currentName=state.questionOrder[state.questionIndex];
+          state.currentChosung=getChosung(state.currentName);
+        }else{
+          player.isDropped=true;
+        }
+        const aliveCount=state.players.filter((p)=>!p.isDropped).length;
+        if(aliveCount<=1){
+          endMinigame(roomId);
+          return;
+        }
+        broadcastMinigame(roomId);
+      }catch(err){
+        socket.emit("minigame_error",{message:"Failed to submit answer"});
       }
     });
 
@@ -504,9 +790,7 @@
           try{
             io.to(result.roomId).emit("dice_rolled",{userId,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,player:result.player,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
             io.to(result.roomId).emit("playerMove",{userId,playerId:result.player.id,character:result.player.character,oldLocation:result.oldLocation,newLocation:result.newLocation,dice1:result.dice1,dice2:result.dice2,isDouble:result.isDouble,hasExtraTurn:result.hasExtraTurn,passedStart:result.passedStart,turnPlayerId:result.turnPlayerId,turnUserId:result.turnUserId,autoSellEvents:result.autoSellEvents});
-            if(result.cardEvent){
-              io.to(result.roomId).emit("drawCard",result.cardEvent);
-            }
+            // drawCard is emitted only via explicit draw_card to avoid double fires.
             if(result.market){
               io.to(result.roomId).emit("market_update",{samsung:result.market.priceSamsung,tesla:result.market.priceTesla,lockheed:result.market.priceLockheed,gold:result.market.priceGold,bitcoin:result.market.priceBtc,prevSamsung:result.market.prevSamsung,prevTesla:result.market.prevTesla,prevLockheed:result.market.prevLockheed,prevGold:result.market.prevGold,prevBtc:result.market.prevBtc});
             }
@@ -531,6 +815,34 @@
         },800);
       }catch(err){
         socket.emit("roll_error",{message:err?.message||"Failed to roll dice"});
+      }
+    });
+
+    socket.on("draw_card",async(payload)=>{
+      try{
+        const info=socketUserMap.get(socket.id);
+        if(!info){
+          socket.emit("draw_error",{message:"Room not joined"});
+          return;
+        }
+        const player=await prisma.player.findFirst({where:{userId:info.userId,roomId:info.roomId},orderBy:{id:"desc"}});
+        if(!player){
+          socket.emit("draw_error",{message:"Player not found"});
+          return;
+        }
+        const node=await prisma.mapNode.findUnique({where:{nodeIdx:player.location}});
+        if(!node||node.type!=="KEY"){
+          socket.emit("draw_error",{message:"Not on key tile"});
+          return;
+        }
+        const card=payload?.card;
+        if(!card||card.id==null||!card.title){
+          socket.emit("draw_error",{message:"Invalid card"});
+          return;
+        }
+        io.to(info.roomId).emit("drawCard",{...card,userId:info.userId,playerId:player.id});
+      }catch(err){
+        socket.emit("draw_error",{message:"Failed to draw card"});
       }
     });
 
@@ -654,6 +966,19 @@
       const info=socketUserMap.get(socket.id);
       if(!info)return;
       socketUserMap.delete(socket.id);
+      const minigameState=minigameStateByRoom.get(info.roomId);
+      if(minigameState&&minigameState.phase==="GAME"){
+        const player=minigameState.players.find((p)=>p.userId===info.userId);
+        if(player&&!player.isDropped){
+          player.isDropped=true;
+          const aliveCount=minigameState.players.filter((p)=>!p.isDropped).length;
+          if(aliveCount<=1){
+            endMinigame(info.roomId);
+          }else{
+            broadcastMinigame(info.roomId);
+          }
+        }
+      }
       const lobby=getLobbyState(info.roomId);
       lobby.players.delete(info.userId);
       lobby.readyUserIds.delete(info.userId);

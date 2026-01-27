@@ -5,7 +5,9 @@ const https = require("https");
 const INITIAL_CASH = 3000000n;
 const MUSK_BONUS = 1000000n;
 const LEE_START_SAMSUNG_SHARES = 10;
-const TRUMP_TOLL_BONUS_RATE = 0.05;
+const TRUMP_TOLL_BONUS_RATE = 0.1;
+const MINIGAME_REWARD = 500000n;
+const minigameRewardByRoom = new Map();
 const PUTIN_WAR_BONUS = 10; // 전쟁 승률 10% 증가
 
 // 전쟁 승률 관련 상수
@@ -58,6 +60,7 @@ function createGameLogic({ prisma, io, market }) {
   const turnStateByRoom = new Map();
   const actionWindowByRoom = new Map();
   const landVisitCount = new Map(); 
+  const firstRollByRoom = new Map();
   const landLastAction = new Map();
 
   // ================= HELPER FUNCTIONS =================
@@ -90,12 +93,36 @@ function createGameLogic({ prisma, io, market }) {
     });
   }
 
+  function isMarketEvent(event) {
+    const text = `${event?.type ?? ""} ${event?.title ?? ""} ${event?.message ?? ""}`.toLowerCase();
+    return text.includes("market") || text.includes("시장") || text.includes("price");
+  }
+
+  function prioritizeNewsEvents(events) {
+    const list = Array.isArray(events) ? events.slice() : [];
+    const scoreEvent = (event) => {
+      const text = `${event?.type ?? ""} ${event?.title ?? ""} ${event?.message ?? ""}`.toLowerCase();
+      let score = 0;
+      if (text.includes("war") || text.includes("전쟁")) score += 4;
+      if (text.includes("worldcup") || text.includes("월드컵")) score += 3;
+      if (text.includes("golden key") || text.includes("goldenkey") || text.includes("황금열쇠")) score += 3;
+      if (text.includes("space") || text.includes("우주")) score += 3;
+      if (text.includes("tax") || text.includes("세금")) score += 2;
+      if (text.includes("land") || text.includes("부동산") || text.includes("매입") || text.includes("매각")) score += 2;
+      if (text.includes("move") || text.includes("이동") || text.includes("도착")) score += 1;
+      if (isMarketEvent(event)) score -= 1;
+      return score;
+    };
+    return list.sort((a, b) => scoreEvent(b) - scoreEvent(a));
+  }
+
   function buildFallbackNews({ round, events, locale }) {
     const safeRound = Number.isFinite(round) ? round : 0;
-    const safeEvents = Array.isArray(events) ? events : [];
+    const safeEvents = prioritizeNewsEvents(events);
     const safeLocale = typeof locale === "string" && locale ? locale : "en";
+    const headlineEvent = safeEvents.find((event) => !isMarketEvent(event)) || safeEvents[0];
     const headline =
-      safeEvents[0]?.title ||
+      headlineEvent?.title ||
       (safeLocale.startsWith("ko") ? `라운드 ${safeRound} 소식` : `Round ${safeRound} News`);
     const summaryEvents = safeEvents
       .slice(0, 3)
@@ -117,7 +144,7 @@ function createGameLogic({ prisma, io, market }) {
     if (!apiKey) throw new Error("GEMINI_API_KEY missing");
     const safeRound = Number.isFinite(round) ? round : 0;
     const safeLocale = typeof locale === "string" && locale ? locale : "ko";
-    const safeEvents = Array.isArray(events) ? events : [];
+    const safeEvents = prioritizeNewsEvents(events);
     console.log(`[News] Gemini request start: round=${safeRound}, locale=${safeLocale}, events=${safeEvents.length}`);
     const eventLines = safeEvents
       .slice(0, 10)
@@ -134,6 +161,9 @@ function createGameLogic({ prisma, io, market }) {
       `Write a free-form headline and a 2-3 sentence summary in locale "${safeLocale}".`,
       `Never mention user names; refer to players by character names (e.g., TRUMP, LEE, MUSK, PUTIN).`,
       `Call out surging/crashing stocks, real estate, or continents when present in the events.`,
+      `If events mention World Cup hosting or Golden Key draws, weave them into the headline or summary.`,
+      `Pick the most distinctive event for the headline; avoid generic market headlines unless market updates are the only notable events.`,
+      `Avoid rigid templates, colon-separated lists, or formulaic phrasing. Vary sentence starts.`,
       `Topic: round ${safeRound} in a competitive board/stock game.`,
       `Return JSON: {"headline":"...","summary":"..."}. No markdown.`,
       `Events:`,
@@ -145,14 +175,14 @@ function createGameLogic({ prisma, io, market }) {
         role: "system",
         parts: [
           {
-            text: "Return ONLY valid JSON with keys headline and summary. No preface text, no markdown, no code fences. Do not mention user names; refer to players by character names only. Highlight surging/crashing assets, real estate, or continents when present. Write a free-form headline and a 2-3 sentence summary without fixed templates.",
+            text: "Return ONLY valid JSON with keys headline and summary. No preface text, no markdown, no code fences. Do not mention user names; refer to players by character names only. Highlight surging/crashing assets, real estate, or continents when present. Write a free-form headline and a 2-3 sentence summary without fixed templates. If events mention World Cup hosting or Golden Key draws, weave them into the headline or summary. Pick the most distinctive event for the headline; avoid generic market headlines unless market updates are the only notable events. Avoid rigid templates, colon-separated lists, or formulaic phrasing.",
           },
         ],
       },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 256,
+        maxOutputTokens: 512,
         responseMimeType: "application/json",
         responseSchema: {
           type: "object",
@@ -173,6 +203,7 @@ function createGameLogic({ prisma, io, market }) {
     });
 
     console.log(`[News] Gemini response status: ${response.status}`);
+    console.log(`[News] Gemini response data: ${response.data.slice(0, 1000)}`);
     if (response.status < 200 || response.status >= 300) {
       throw new Error("Gemini request failed");
     }
@@ -183,6 +214,7 @@ function createGameLogic({ prisma, io, market }) {
       throw new Error("Invalid Gemini response");
     }
     const parts = payload?.candidates?.[0]?.content?.parts;
+    console.log(`[News] Gemini parts: ${JSON.stringify(parts).slice(0, 1000)}`);
     const text = Array.isArray(parts)
       ? parts.map((p) => (p && typeof p.text === "string" ? p.text : "")).join("\n").trim()
       : "";
@@ -198,8 +230,19 @@ function createGameLogic({ prisma, io, market }) {
 
     const extractJson = (raw) => {
       const trimmed = String(raw || "").trim();
-      const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-      if (fenced && fenced[1]) return fenced[1].trim();
+      // 마크다운 코드 블록 추출 (greedy하게 매칭)
+      const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (fenced && fenced[1]) {
+        const inner = fenced[1].trim();
+        // 코드 블록 내부에서 JSON 객체만 추출
+        const jsonStart = inner.indexOf("{");
+        const jsonEnd = inner.lastIndexOf("}");
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+          return inner.slice(jsonStart, jsonEnd + 1);
+        }
+        return inner;
+      }
+      // 코드 블록이 없으면 직접 JSON 객체 추출
       const start = trimmed.indexOf("{");
       const end = trimmed.lastIndexOf("}");
       if (start >= 0 && end > start) return trimmed.slice(start, end + 1);
@@ -207,18 +250,27 @@ function createGameLogic({ prisma, io, market }) {
     };
 
     let parsed;
+    // 먼저 JSON 추출 시도 (마크다운 코드 블록 처리)
+    const extracted = extractJson(text);
+    const cleaned = cleanJson(extracted);
+
+    console.log(`[News] DEBUG raw text (${text.length} chars): ${JSON.stringify(text.slice(0, 500))}`);
+    console.log(`[News] DEBUG extracted (${extracted.length} chars): ${JSON.stringify(extracted.slice(0, 500))}`);
+    console.log(`[News] DEBUG cleaned (${cleaned.length} chars): ${JSON.stringify(cleaned.slice(0, 500))}`);
+
     try {
-      parsed = JSON.parse(text);
-    } catch {
+      parsed = JSON.parse(cleaned);
+      console.log(`[News] DEBUG parsed from cleaned successfully`);
+    } catch (e1) {
+      console.log(`[News] DEBUG cleaned parse error: ${e1.message}`);
       try {
-        parsed = JSON.parse(cleanJson(extractJson(text)));
-      } catch {
-        const raw = String(text || "").trim();
-        const extracted = extractJson(raw);
-        console.log(`[News] Gemini raw text fallback: ${raw.slice(0, 400)}`);
-        console.log(`[News] Gemini extracted text fallback: ${String(extracted).slice(0, 400)}`);
-        const headlineMatch = raw.match(/headline\s*[:=]\s*(.+)/i);
-        const summaryMatch = raw.match(/summary\s*[:=]\s*([\s\S]+)/i);
+        // 순수 텍스트로 직접 파싱 시도
+        parsed = JSON.parse(text);
+        console.log(`[News] DEBUG parsed from raw text successfully`);
+      } catch (e2) {
+        console.log(`[News] DEBUG raw parse error: ${e2.message}`);
+        const headlineMatch = text.match(/(?:headline|제목|헤드라인)\s*[:=]\s*"?([^"\n]+)"?/i);
+        const summaryMatch = text.match(/(?:summary|요약|요지)\s*[:=]\s*"?([\s\S]+?)"?(?:\s*}|$)/i);
         if (headlineMatch && summaryMatch) {
           parsed = {
             headline: headlineMatch[1].trim(),
@@ -298,7 +350,16 @@ function createGameLogic({ prisma, io, market }) {
     if (!room) return null;
     const players = await getLatestPlayersByUser(tx, roomId);
     if (players.length === 0) return null;
-    
+
+    const storedOrder = roomTurnOrder.get(roomId);
+    if (Array.isArray(storedOrder) && storedOrder.length > 0) {
+      const playerIdSet = new Set(players.map((p) => p.id));
+      const filtered = storedOrder.filter((id) => playerIdSet.has(id));
+      if (filtered.length > 0) {
+        return filtered[room.turnPlayerIdx % filtered.length];
+      }
+    }
+
     const sorted = players.slice().sort((a, b) => a.id - b.id);
     return sorted[room.turnPlayerIdx % sorted.length].id;
   }
@@ -405,7 +466,7 @@ function createGameLogic({ prisma, io, market }) {
   // [국세청] 세금 징수 핸들러
   async function handleTaxNode(tx, player, marketData) {
     const totals = await computeTotals(tx, player.id);
-    const taxAmount = totals.totalAsset / 10n; // 자산의 10%
+    const taxAmount = totals.totalAsset / 5n; // 자산의 20%
     const sold = await autoSellAssets(tx, player, taxAmount, marketData);
     let updatedPlayer = sold.player;
     
@@ -451,10 +512,12 @@ function createGameLogic({ prisma, io, market }) {
       }
       if (turnState.rolled && !turnState.extraRoll) throw new Error("Already rolled");
 
-      // 주사위 굴리기
-      const dice1 = Math.floor(Math.random() * 6) + 1;
-      const dice2 = Math.floor(Math.random() * 6) + 1;
-      const isDouble = dice1 === dice2;
+      // 주사위 굴리기 (테스트: 첫 주사위는 항상 2칸)
+      const firstRollDone = firstRollByRoom.get(player.roomId) === true;
+      const dice1 = firstRollDone ? (Math.floor(Math.random() * 6) + 1) : 1;
+      const dice2 = firstRollDone ? (Math.floor(Math.random() * 6) + 1) : 1;
+      const isDouble = firstRollDone ? dice1 === dice2 : false;
+      if (!firstRollDone) firstRollByRoom.set(player.roomId, true);
       const oldLocation = player.location;
       const newLocation = (oldLocation + dice1 + dice2) % 32;
       const passedStart = newLocation < oldLocation;
@@ -520,10 +583,13 @@ function createGameLogic({ prisma, io, market }) {
       }
 
       // 6. 일반 땅 및 통행료 처리 (월드컵 포함)
+      let tollPaid = null;
+      let tollOwnerUserId = null;
+      let landIsLandmark = false;
       const mapNode = await tx.mapNode.findUnique({ where: { nodeIdx: newLocation } });
-      if (mapNode?.type === "LAND" || mapNode?.type === "EXPO") { 
+      if (mapNode?.type === "LAND" || mapNode?.type === "EXPO") {
         const land = await tx.gameLand.findFirst({ where: { roomId: updatedPlayer.roomId, nodeIdx: newLocation } });
-        
+
         // 내 땅 도착: 방문 횟수 증가
         if (land && land.ownerId === updatedPlayer.id) {
           incrementVisit(updatedPlayer.id, newLocation);
@@ -532,8 +598,9 @@ function createGameLogic({ prisma, io, market }) {
         else if (land && land.ownerId && land.ownerId !== updatedPlayer.id) {
           const owner = await tx.player.findUnique({ where: { id: land.ownerId } });
           if (owner) {
+            landIsLandmark = land.isLandmark;
             let toll = getLandBaseToll(newLocation, mapNode.baseToll);
-            
+
             // 월드컵 개최지면 통행료 2배 (임시 로직)
             if (land.hasWorldCup) toll = toll * 2n;
 
@@ -543,11 +610,13 @@ function createGameLogic({ prisma, io, market }) {
             const sold = await autoSellAssets(tx, updatedPlayer, toll, marketData);
             updatedPlayer = sold.player;
             const payAmount = updatedPlayer.cash < toll ? updatedPlayer.cash : toll;
-            
+
             updatedPlayer = await tx.player.update({ where: { id: updatedPlayer.id }, data: { cash: updatedPlayer.cash - payAmount } });
-            await tx.player.update({ where: { id: owner.id }, data: { cash: owner.cash + payAmount } });
-            
+            const updatedOwner = await tx.player.update({ where: { id: owner.id }, data: { cash: owner.cash + payAmount } });
+
             tollOwnerId = owner.id;
+            tollOwnerUserId = owner.userId;
+            tollPaid = { amount: Number(payAmount), ownerId: owner.id, ownerUserId: owner.userId, ownerCash: Number(updatedOwner.cash), isLandmark: landIsLandmark };
             if (sold.autoSales.length) {
                 autoSellEvents.push({ type: "TOLL", items: sold.autoSales, amount: toll, paid: payAmount, bankrupt: !sold.covered, ownerId: owner.id });
             }
@@ -564,12 +633,13 @@ function createGameLogic({ prisma, io, market }) {
         player: updatedPlayer,
         roomId: updatedPlayer.roomId,
         tollOwnerId,
+        tollPaid,
         turnPlayerId,
         turnUserId,
         market: marketData,
         war: getWarPayload(),
         autoSellEvents,
-        actionRequired, 
+        actionRequired,
         eventResult
       };
     });
@@ -583,21 +653,43 @@ function createGameLogic({ prisma, io, market }) {
         const targetNode = Number(req.body.nodeIdx);
         if (!Number.isInteger(targetNode) || targetNode < 0 || targetNode > 31) return res.status(400).json({ error: "Invalid node" });
 
+        const KEY_NODES = [12, 20, 28]; // 황금열쇠 칸
+
         const result = await prisma.$transaction(async (tx) => {
             const player = await tx.player.findFirst({ where: { userId: req.user.id }, orderBy: { id: "desc" } });
             if (!player) throw new Error("Player not found");
             if (!player.isResting) throw new Error("Not in space travel mode");
 
+            const marketData = await market.getOrCreateMarket(tx, player.roomId);
+            let eventResult = null;
+
             // 이동 처리 (우주여행 종료)
-            const updated = await tx.player.update({
+            let updated = await tx.player.update({
                 where: { id: player.id },
                 data: { location: targetNode, isResting: false }
             });
-            return { player: updated };
+
+            // 국세청 도착 시 세금 징수
+            if (targetNode === NODE_TYPE.TAX) {
+              eventResult = await handleTaxNode(tx, updated, marketData);
+              updated = await tx.player.findUnique({ where: { id: player.id } });
+            }
+
+            return { player: updated, userId: req.user.id, roomId: player.roomId, eventResult, isKeyNode: KEY_NODES.includes(targetNode) };
         });
-        
+
+        // 우주여행 도착 후 액션 윈도우 설정 (거래/구매 등 허용)
+        actionWindowByRoom.set(result.roomId, { userId: result.userId, location: targetNode });
+
         await emitAssetUpdate(result.player.id);
-        if(io) io.to(result.player.roomId).emit("player_move", { playerId: result.player.id, location: targetNode, type: "SPACE" });
+        if(io) io.to(result.player.roomId).emit("playerMove", {
+          playerId: result.player.id,
+          userId: result.userId,
+          newLocation: targetNode,
+          type: "SPACE",
+          eventResult: result.eventResult,
+          isKeyNode: result.isKeyNode
+        });
         return res.json(result);
       } catch (e) {
         return res.status(400).json({ error: e.message || "Space travel failed" });
@@ -726,13 +818,25 @@ function createGameLogic({ prisma, io, market }) {
 
     router.post("/api/game/character", requireAuth, async (req, res) => {
       try {
-        const character = String(req.body?.character || "").toUpperCase();
-        if (!CHARACTER_LABEL[character]) return res.status(400).json({ error: "Invalid character" });
+        const rawCharacter = req.body?.character;
         const result = await prisma.$transaction(async (tx) => {
           const player = await tx.player.findFirst({ where: { userId: req.user.id }, orderBy: { id: "desc" }, include: { assets: true, room: true } });
           if (!player) throw new Error("Player not found");
           if (player.room?.status !== "WAITING") throw new Error("Game already started");
-          
+
+          if (!rawCharacter) {
+            let assets = player.assets || await tx.playerAsset.create({ data: { playerId: player.id } });
+            assets = await tx.playerAsset.update({ where: { playerId: player.id }, data: { samsung: 0, tesla: 0, lockheed: 0, gold: 0, bitcoin: 0 } });
+            const updated = await tx.player.update({
+              where: { id: player.id },
+              data: { character: null, cash: INITIAL_CASH, totalAsset: INITIAL_CASH, location: 0, extraTurnUsed: false }
+            });
+            return { playerId: player.id, character: updated.character, cash: updated.cash, roomId: player.roomId, userId: player.userId };
+          }
+
+          const character = String(rawCharacter || "").toUpperCase();
+          if (!CHARACTER_LABEL[character]) return res.status(400).json({ error: "Invalid character" });
+
           const others = await getLatestPlayersByUser(tx, player.roomId);
           const isActiveSocket = (sid) => !!sid && !!io && !!io.sockets && !!io.sockets.sockets && io.sockets.sockets.has(sid);
           const activeOthers = others.filter((p) => p.userId !== player.userId && isActiveSocket(p.socketId));
@@ -754,6 +858,35 @@ function createGameLogic({ prisma, io, market }) {
         return res.json({ playerId: result.playerId, character: result.character, cash: result.cash });
       } catch (e) {
         const message = e?.message || "Failed to set character";
+        return res.status(400).json({ error: message });
+      }
+    });
+
+    router.post("/api/game/minigame-reward", requireAuth, async (req, res) => {
+      try {
+        const winnerUserId = Number(req.body?.winnerUserId);
+        if (!Number.isInteger(winnerUserId)) return res.status(400).json({ error: "Invalid winner" });
+        const requester = await prisma.player.findFirst({ where: { userId: req.user.id }, orderBy: { id: "desc" } });
+        if (!requester) throw new Error("Player not found");
+        const winner = await prisma.player.findFirst({
+          where: { userId: winnerUserId, roomId: requester.roomId },
+          orderBy: { id: "desc" },
+        });
+        if (!winner) throw new Error("Winner not found");
+        const now = Date.now();
+        const lastRewarded = minigameRewardByRoom.get(requester.roomId) || 0;
+        if (now - lastRewarded < 30000) {
+          return res.json({ ok: true, reward: Number(MINIGAME_REWARD) });
+        }
+        const updated = await prisma.player.update({
+          where: { id: winner.id },
+          data: { cash: winner.cash + MINIGAME_REWARD },
+        });
+        minigameRewardByRoom.set(requester.roomId, now);
+        await emitAssetUpdate(updated.id);
+        return res.json({ ok: true, reward: Number(MINIGAME_REWARD) });
+      } catch (e) {
+        const message = e?.message || "Failed to grant reward";
         return res.status(400).json({ error: message });
       }
     });
