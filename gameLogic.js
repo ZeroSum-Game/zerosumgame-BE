@@ -6,6 +6,8 @@ const INITIAL_CASH = 3000000n;
 const MUSK_BONUS = 1000000n;
 const LEE_START_SAMSUNG_SHARES = 10;
 const TRUMP_TOLL_BONUS_RATE = 0.05;
+const MINIGAME_REWARD = 500000n;
+const minigameRewardByRoom = new Map();
 const PUTIN_WAR_BONUS = 10; // 전쟁 승률 10% 증가
 
 // 전쟁 승률 관련 상수
@@ -58,6 +60,7 @@ function createGameLogic({ prisma, io, market }) {
   const turnStateByRoom = new Map();
   const actionWindowByRoom = new Map();
   const landVisitCount = new Map(); 
+  const firstRollByRoom = new Map();
   const landLastAction = new Map();
 
   // ================= HELPER FUNCTIONS =================
@@ -451,10 +454,12 @@ function createGameLogic({ prisma, io, market }) {
       }
       if (turnState.rolled && !turnState.extraRoll) throw new Error("Already rolled");
 
-      // 주사위 굴리기
-      const dice1 = Math.floor(Math.random() * 6) + 1;
-      const dice2 = Math.floor(Math.random() * 6) + 1;
-      const isDouble = dice1 === dice2;
+      // 주사위 굴리기 (테스트: 첫 주사위는 항상 2칸)
+      const firstRollDone = firstRollByRoom.get(player.roomId) === true;
+      const dice1 = firstRollDone ? (Math.floor(Math.random() * 6) + 1) : 1;
+      const dice2 = firstRollDone ? (Math.floor(Math.random() * 6) + 1) : 1;
+      const isDouble = firstRollDone ? dice1 === dice2 : false;
+      if (!firstRollDone) firstRollByRoom.set(player.roomId, true);
       const oldLocation = player.location;
       const newLocation = (oldLocation + dice1 + dice2) % 32;
       const passedStart = newLocation < oldLocation;
@@ -766,6 +771,35 @@ function createGameLogic({ prisma, io, market }) {
         return res.json({ playerId: result.playerId, character: result.character, cash: result.cash });
       } catch (e) {
         const message = e?.message || "Failed to set character";
+        return res.status(400).json({ error: message });
+      }
+    });
+
+    router.post("/api/game/minigame-reward", requireAuth, async (req, res) => {
+      try {
+        const winnerUserId = Number(req.body?.winnerUserId);
+        if (!Number.isInteger(winnerUserId)) return res.status(400).json({ error: "Invalid winner" });
+        const requester = await prisma.player.findFirst({ where: { userId: req.user.id }, orderBy: { id: "desc" } });
+        if (!requester) throw new Error("Player not found");
+        const winner = await prisma.player.findFirst({
+          where: { userId: winnerUserId, roomId: requester.roomId },
+          orderBy: { id: "desc" },
+        });
+        if (!winner) throw new Error("Winner not found");
+        const now = Date.now();
+        const lastRewarded = minigameRewardByRoom.get(requester.roomId) || 0;
+        if (now - lastRewarded < 30000) {
+          return res.json({ ok: true, reward: Number(MINIGAME_REWARD) });
+        }
+        const updated = await prisma.player.update({
+          where: { id: winner.id },
+          data: { cash: winner.cash + MINIGAME_REWARD },
+        });
+        minigameRewardByRoom.set(requester.roomId, now);
+        await emitAssetUpdate(updated.id);
+        return res.json({ ok: true, reward: Number(MINIGAME_REWARD) });
+      } catch (e) {
+        const message = e?.message || "Failed to grant reward";
         return res.status(400).json({ error: message });
       }
     });
