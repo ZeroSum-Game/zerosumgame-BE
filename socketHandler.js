@@ -958,6 +958,138 @@
       }
     });
 
+    // 전쟁 전투 시작 - 승자/패자 결정 및 전리품 모달 표시
+    socket.on("start_war_fight",async({opponentUserId})=>{
+      const info=socketUserMap.get(socket.id);
+      if(!info)return socket.emit("war_error",{message:"Not authenticated"});
+
+      try{
+        const result=await prisma.$transaction(async(tx)=>{
+          const attacker=await tx.player.findFirst({where:{userId:info.userId,roomId:info.roomId},include:{assets:true}});
+          const defender=await tx.player.findFirst({where:{userId:opponentUserId,roomId:info.roomId},include:{assets:true}});
+
+          if(!attacker||!defender)throw new Error("플레이어를 찾을 수 없습니다.");
+
+          const market=await tx.market.findUnique({where:{roomId:info.roomId}});
+          if(!market)throw new Error("시장 정보를 찾을 수 없습니다.");
+
+          // 자산 가치 계산
+          const attackerAsset=gameLogic.calcWarAssetValue(attacker.assets,market,attacker.cash);
+          const defenderAsset=gameLogic.calcWarAssetValue(defender.assets,market,defender.cash);
+
+          // 승률 계산
+          const winRate=gameLogic.calcWarWinRate({
+            myAsset:attackerAsset,
+            oppAsset:defenderAsset,
+            character:attacker.character
+          });
+
+          // 승패 결정
+          const roll=Math.random();
+          const attackerWins=roll<winRate;
+
+          const winnerId=attackerWins?attacker.id:defender.id;
+          const loserId=attackerWins?defender.id:attacker.id;
+          const winnerUserId=attackerWins?info.userId:opponentUserId;
+          const loserUserId=attackerWins?opponentUserId:info.userId;
+
+          // 패자의 땅 목록 조회
+          const loserLands=await tx.gameLand.findMany({
+            where:{roomId:info.roomId,ownerId:loserId}
+          });
+
+          return {
+            winnerId,
+            loserId,
+            winnerUserId,
+            loserUserId,
+            winRate:winRate*100,
+            attackerWins,
+            loserLands:loserLands.map(l=>l.nodeIdx),
+            cashPenalty:1000000 // 땅이 없을 경우 100만원
+          };
+        });
+
+        // 전투 결과를 방 전체에 브로드캐스트
+        io.to(info.roomId).emit("war_fight_result",{
+          winnerId:result.winnerId,
+          loserId:result.loserId,
+          winnerUserId:result.winnerUserId,
+          loserUserId:result.loserUserId,
+          winRate:result.winRate,
+          attackerWins:result.attackerWins,
+          loserLands:result.loserLands,
+          cashPenalty:result.cashPenalty
+        });
+
+      }catch(err){
+        console.error("[start_war_fight] error:",err);
+        socket.emit("war_error",{message:err?.message||"전쟁 처리에 실패했습니다."});
+      }
+    });
+
+    // 전쟁 전리품 선택 - 땅 이전 또는 현금 이전
+    socket.on("select_war_spoils",async({winnerId,loserId,landId})=>{
+      const info=socketUserMap.get(socket.id);
+      if(!info)return socket.emit("war_error",{message:"Not authenticated"});
+
+      try{
+        const result=await prisma.$transaction(async(tx)=>{
+          const winner=await tx.player.findUnique({where:{id:winnerId}});
+          const loser=await tx.player.findUnique({where:{id:loserId}});
+
+          if(!winner||!loser)throw new Error("플레이어를 찾을 수 없습니다.");
+
+          let landName=null;
+
+          if(landId!==null){
+            // 땅 소유권 이전
+            const land=await tx.gameLand.findFirst({
+              where:{roomId:info.roomId,nodeIdx:landId,ownerId:loserId}
+            });
+
+            if(!land)throw new Error("해당 땅을 찾을 수 없습니다.");
+
+            await tx.gameLand.update({
+              where:{id:land.id},
+              data:{ownerId:winnerId}
+            });
+
+            const mapNode=await tx.mapNode.findUnique({where:{nodeIdx:landId}});
+            landName=mapNode?.name||`땅 ${landId}`;
+          }else{
+            // 현금 이전 (땅이 없는 경우)
+            const cashPenalty=1000000n;
+            const actualPenalty=loser.cash<cashPenalty?loser.cash:cashPenalty;
+
+            await tx.player.update({
+              where:{id:loserId},
+              data:{cash:loser.cash-actualPenalty}
+            });
+
+            await tx.player.update({
+              where:{id:winnerId},
+              data:{cash:winner.cash+actualPenalty}
+            });
+          }
+
+          return {winnerId,loserId,landId,landName};
+        });
+
+        // 결과를 방 전체에 브로드캐스트
+        io.to(info.roomId).emit("war_spoils_result",{
+          winnerId:result.winnerId,
+          loserId:result.loserId,
+          landId:result.landId,
+          landName:result.landName
+        });
+
+      }catch(err){
+        console.error("[select_war_spoils] error:",err);
+        socket.emit("war_error",{message:err?.message||"전리품 선택에 실패했습니다."});
+      }
+    });
+
     socket.on("disconnect",async()=>{
       try{
         await prisma.player.updateMany({where:{socketId:socket.id},data:{socketId:null}});
