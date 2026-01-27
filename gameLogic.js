@@ -648,21 +648,43 @@ function createGameLogic({ prisma, io, market }) {
         const targetNode = Number(req.body.nodeIdx);
         if (!Number.isInteger(targetNode) || targetNode < 0 || targetNode > 31) return res.status(400).json({ error: "Invalid node" });
 
+        const KEY_NODES = [12, 20, 28]; // 황금열쇠 칸
+
         const result = await prisma.$transaction(async (tx) => {
             const player = await tx.player.findFirst({ where: { userId: req.user.id }, orderBy: { id: "desc" } });
             if (!player) throw new Error("Player not found");
             if (!player.isResting) throw new Error("Not in space travel mode");
 
+            const marketData = await market.getOrCreateMarket(tx, player.roomId);
+            let eventResult = null;
+
             // 이동 처리 (우주여행 종료)
-            const updated = await tx.player.update({
+            let updated = await tx.player.update({
                 where: { id: player.id },
                 data: { location: targetNode, isResting: false }
             });
-            return { player: updated };
+
+            // 국세청 도착 시 세금 징수
+            if (targetNode === NODE_TYPE.TAX) {
+              eventResult = await handleTaxNode(tx, updated, marketData);
+              updated = await tx.player.findUnique({ where: { id: player.id } });
+            }
+
+            return { player: updated, userId: req.user.id, roomId: player.roomId, eventResult, isKeyNode: KEY_NODES.includes(targetNode) };
         });
-        
+
+        // 우주여행 도착 후 액션 윈도우 설정 (거래/구매 등 허용)
+        actionWindowByRoom.set(result.roomId, { userId: result.userId, location: targetNode });
+
         await emitAssetUpdate(result.player.id);
-        if(io) io.to(result.player.roomId).emit("player_move", { playerId: result.player.id, location: targetNode, type: "SPACE" });
+        if(io) io.to(result.player.roomId).emit("playerMove", {
+          playerId: result.player.id,
+          userId: result.userId,
+          newLocation: targetNode,
+          type: "SPACE",
+          eventResult: result.eventResult,
+          isKeyNode: result.isKeyNode
+        });
         return res.json(result);
       } catch (e) {
         return res.status(400).json({ error: e.message || "Space travel failed" });

@@ -174,7 +174,8 @@
           socket.emit("join_error",{message:`Room is full (${MAX_PLAYERS} max)`});
           return;
         }
-        if((room.status==="ENDED"||room.status==="PLAYING")&&lobbyState.players.size===0){
+        // 방 리셋 조건: ENDED 상태이고 lobbyState가 비어있을 때만
+        if(room.status==="ENDED"&&lobbyState.players.size===0){
           room=await prisma.room.update({where:{id:resolvedRoomId},data:{status:"WAITING",turnPlayerIdx:0,currentTurn:1}});
           await prisma.gameLand.deleteMany({where:{roomId:resolvedRoomId}});
           await prisma.player.deleteMany({where:{roomId:resolvedRoomId}});
