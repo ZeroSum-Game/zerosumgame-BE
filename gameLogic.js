@@ -463,7 +463,7 @@ function createGameLogic({ prisma, io, market }) {
   // [국세청] 세금 징수 핸들러
   async function handleTaxNode(tx, player, marketData) {
     const totals = await computeTotals(tx, player.id);
-    const taxAmount = totals.totalAsset / 10n; // 자산의 10%
+    const taxAmount = totals.totalAsset / 5n; // 자산의 20%
     const sold = await autoSellAssets(tx, player, taxAmount, marketData);
     let updatedPlayer = sold.player;
     
