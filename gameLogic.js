@@ -160,7 +160,7 @@ function createGameLogic({ prisma, io, market }) {
       `You are a game newsroom editor.`,
       `Write a free-form headline and a 2-3 sentence summary in locale "${safeLocale}".`,
       `Never mention user names; refer to players by character names (e.g., TRUMP, LEE, MUSK, PUTIN).`,
-      `Game Mechanics: Players use a single die ranging from 1 to 9. Treat rolls of 7-9 as high-speed/lucky moves.`,
+      `Game Mechanics: Players use a single die ranging from 1 to 6.`,
       `Ensure player diversity. Do not default to the player with the most events; look for drama, underdogs, or interactions to vary the spotlight.`,
       `Call out surging/crashing stocks, real estate, or continents when present in the events.`,
       `If events mention World Cup hosting or Golden Key draws, weave them into the headline or summary.`,
