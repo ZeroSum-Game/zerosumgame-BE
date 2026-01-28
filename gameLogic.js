@@ -701,7 +701,8 @@ function createGameLogic({ prisma, io, market }) {
           newLocation: targetNode,
           type: "SPACE",
           eventResult: result.eventResult,
-          isKeyNode: result.isKeyNode
+          isKeyNode: result.isKeyNode,
+          passedStart: false
         });
         return res.json(result);
       } catch (e) {
