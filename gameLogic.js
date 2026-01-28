@@ -54,12 +54,12 @@ const NEUTRAL_NODES = new Set([0, 8, 16, 24, 30]);
 function createGameLogic({ prisma, io, market }) {
   // 상태 관리 (메모리)
   const warState = { active: false, warLine: null, warNode: null, turnsLeft: 0, recoveryActive: false, recoveryLine: 1, recoveryNode: 1 };
-  
+
   const roomTurnOrder = new Map();
   const currentTurnUserByRoom = new Map();
   const turnStateByRoom = new Map();
   const actionWindowByRoom = new Map();
-  const landVisitCount = new Map(); 
+  const landVisitCount = new Map();
   const firstRollByRoom = new Map();
   const landLastAction = new Map();
 
@@ -299,13 +299,13 @@ function createGameLogic({ prisma, io, market }) {
   function setLastAction(playerId, nodeIdx, action) { landLastAction.set(getLandKey(playerId, nodeIdx), action); }
 
   function getLineIndex(nodeIdx) { return WAR_LINE_RANGES.findIndex((range) => nodeIdx >= range.start && nodeIdx <= range.end); }
-  function getAdjacentLines(lineIdx) { 
-    const adjacent = []; 
-    if (lineIdx > 0) adjacent.push(lineIdx - 1); 
-    if (lineIdx < WAR_LINE_RANGES.length - 1) adjacent.push(lineIdx + 1); 
-    return adjacent; 
+  function getAdjacentLines(lineIdx) {
+    const adjacent = [];
+    if (lineIdx > 0) adjacent.push(lineIdx - 1);
+    if (lineIdx < WAR_LINE_RANGES.length - 1) adjacent.push(lineIdx + 1);
+    return adjacent;
   }
-  
+
   function getWarLandMultiplier(nodeIdx, isOwned) {
     if (NEUTRAL_NODES.has(nodeIdx) || !isOwned) return 1;
     const lineIdx = getLineIndex(nodeIdx);
@@ -368,7 +368,7 @@ function createGameLogic({ prisma, io, market }) {
 
   function getLandBasePrice(nodeIdx) { return LAND_PRICE_BY_NODE[nodeIdx] || 0n; }
   function getLandBaseToll(nodeIdx, baseToll) { return LAND_TOLL_BY_NODE[nodeIdx] || baseToll || 0n; }
-  
+
   function calcLandPriceFromToll(baseToll, nodeIdx) {
     const stability = LAND_STABILITY_BY_NODE[nodeIdx];
     const toll = getLandBaseToll(nodeIdx, baseToll);
@@ -403,7 +403,7 @@ function createGameLogic({ prisma, io, market }) {
         return { roomId: totals.player.roomId, userId: totals.player.userId, cash: totals.player.cash, totalAsset: totals.totalAsset };
       });
       io.to(payload.roomId).emit("asset_update", payload);
-    } catch (e) {}
+    } catch (e) { }
   }
 
   function calcWarAssetValue(assets, marketData, cash) {
@@ -471,7 +471,7 @@ function createGameLogic({ prisma, io, market }) {
     const taxAmount = totals.totalAsset / 5n; // 자산의 20%
     const sold = await autoSellAssets(tx, player, taxAmount, marketData);
     let updatedPlayer = sold.player;
-    
+
     // 낼 돈이 없으면 가진 현금 전부 징수
     const payAmount = updatedPlayer.cash < taxAmount ? updatedPlayer.cash : taxAmount;
     if (payAmount > 0n) {
@@ -485,6 +485,7 @@ function createGameLogic({ prisma, io, market }) {
       type: "TAX",
       amount: taxAmount,
       paid: payAmount,
+      totalAsset: totals.totalAsset,  // 총 자산 (현금 + 땅 + 주식)
       autoSales: sold.autoSales,
       isBankrupt: updatedPlayer.isBankrupt
     };
@@ -496,7 +497,7 @@ function createGameLogic({ prisma, io, market }) {
       if (!player) throw new Error("Player not found");
       const room = await tx.room.findUnique({ where: { id: player.roomId } });
       if (!room || room.status !== "PLAYING") throw new Error("Game not started");
-      
+
       const currentTurnId = await getTurnPlayerId(tx, player.roomId);
       if (currentTurnId !== player.id) throw new Error("Not your turn");
 
@@ -523,7 +524,7 @@ function createGameLogic({ prisma, io, market }) {
       const oldLocation = player.location;
       const newLocation = (oldLocation + dice1 + dice2) % 32;
       const passedStart = newLocation < oldLocation;
-      const salary = passedStart ? 200000n : 0n;
+      const salary = passedStart ? 2000000n : 0n;
       const hasExtraTurn = isDouble && !player.extraTurnUsed;
 
       // 주식 시장 변동
@@ -542,19 +543,19 @@ function createGameLogic({ prisma, io, market }) {
         data: { location: newLocation, cash: player.cash + salary, extraTurnUsed: hasExtraTurn ? true : false }
       });
 
-      turnState.rolled = true;
+      turnState.rolled = hasExtraTurn ? false : true;  // Reset to false if extra turn granted
       turnState.extraRoll = hasExtraTurn;
       turnStateByRoom.set(player.roomId, turnState);
-      
+
       // Action Window 설정 (구매/전쟁 등 검증용)
       actionWindowByRoom.set(player.roomId, { userId: player.userId, location: newLocation });
 
       // 결과 변수 초기화
       let eventResult = null;
-      let actionRequired = null; 
+      let actionRequired = null;
       let tollOwnerId = null;
       const autoSellEvents = [];
-      
+
       // 1. 국세청 (TAX) -> 자동 실행
       if (newLocation === NODE_TYPE.TAX) {
         eventResult = await handleTaxNode(tx, updatedPlayer, marketData);
@@ -568,7 +569,7 @@ function createGameLogic({ prisma, io, market }) {
       // 3. 전쟁 (WAR) -> 선택 모달 요청
       else if (newLocation === NODE_TYPE.WAR) {
         if (!warState.active) {
-          actionRequired = "WAR_CHOICE"; 
+          actionRequired = "WAR_CHOICE";
         }
       }
       // 4. 시작점 (START) -> 매수 모달 요청
@@ -580,7 +581,7 @@ function createGameLogic({ prisma, io, market }) {
         const land = await tx.gameLand.findFirst({ where: { roomId: player.roomId, nodeIdx: newLocation } });
         // 주인이 없거나 내가 주인이면 개최 가능
         if (!land || land.ownerId === player.id) {
-            actionRequired = "WORLDCUP_HOST";
+          actionRequired = "WORLDCUP_HOST";
         }
       }
 
@@ -620,7 +621,7 @@ function createGameLogic({ prisma, io, market }) {
             tollOwnerUserId = owner.userId;
             tollPaid = { amount: Number(payAmount), ownerId: owner.id, ownerUserId: owner.userId, ownerCash: Number(updatedOwner.cash), isLandmark: landIsLandmark };
             if (sold.autoSales.length) {
-                autoSellEvents.push({ type: "TOLL", items: sold.autoSales, amount: toll, paid: payAmount, bankrupt: !sold.covered, ownerId: owner.id });
+              autoSellEvents.push({ type: "TOLL", items: sold.autoSales, amount: toll, paid: payAmount, bankrupt: !sold.covered, ownerId: owner.id });
             }
           }
         }
@@ -658,33 +659,33 @@ function createGameLogic({ prisma, io, market }) {
         const KEY_NODES = [12, 20, 28]; // 황금열쇠 칸
 
         const result = await prisma.$transaction(async (tx) => {
-            const player = await tx.player.findFirst({ where: { userId: req.user.id }, orderBy: { id: "desc" } });
-            if (!player) throw new Error("Player not found");
-            if (!player.isResting) throw new Error("Not in space travel mode");
+          const player = await tx.player.findFirst({ where: { userId: req.user.id }, orderBy: { id: "desc" } });
+          if (!player) throw new Error("Player not found");
+          if (!player.isResting) throw new Error("Not in space travel mode");
 
-            const marketData = await market.getOrCreateMarket(tx, player.roomId);
-            let eventResult = null;
+          const marketData = await market.getOrCreateMarket(tx, player.roomId);
+          let eventResult = null;
 
-            // 이동 처리 (우주여행 종료)
-            let updated = await tx.player.update({
-                where: { id: player.id },
-                data: { location: targetNode, isResting: false }
-            });
+          // 이동 처리 (우주여행 종료)
+          let updated = await tx.player.update({
+            where: { id: player.id },
+            data: { location: targetNode, isResting: false }
+          });
 
-            // 국세청 도착 시 세금 징수
-            if (targetNode === NODE_TYPE.TAX) {
-              eventResult = await handleTaxNode(tx, updated, marketData);
-              updated = await tx.player.findUnique({ where: { id: player.id } });
-            }
+          // 국세청 도착 시 세금 징수
+          if (targetNode === NODE_TYPE.TAX) {
+            eventResult = await handleTaxNode(tx, updated, marketData);
+            updated = await tx.player.findUnique({ where: { id: player.id } });
+          }
 
-            return { player: updated, userId: req.user.id, roomId: player.roomId, eventResult, isKeyNode: KEY_NODES.includes(targetNode) };
+          return { player: updated, userId: req.user.id, roomId: player.roomId, eventResult, isKeyNode: KEY_NODES.includes(targetNode) };
         });
 
         // 우주여행 도착 후 액션 윈도우 설정 (거래/구매 등 허용)
         actionWindowByRoom.set(result.roomId, { userId: result.userId, location: targetNode });
 
         await emitAssetUpdate(result.player.id);
-        if(io) io.to(result.player.roomId).emit("playerMove", {
+        if (io) io.to(result.player.roomId).emit("playerMove", {
           playerId: result.player.id,
           userId: result.userId,
           newLocation: targetNode,
@@ -699,68 +700,68 @@ function createGameLogic({ prisma, io, market }) {
     });
 
     router.post("/api/game/buy-asset", requireAuth, async (req, res) => {
-        try {
-            const { type, quantity } = req.body; // type: 'samsung', 'tesla' ...
-            const qty = Number(quantity);
-            if (qty <= 0) return res.status(400).json({ error: "Invalid quantity" });
+      try {
+        const { type, quantity } = req.body; // type: 'samsung', 'tesla' ...
+        const qty = Number(quantity);
+        if (qty <= 0) return res.status(400).json({ error: "Invalid quantity" });
 
-            const result = await prisma.$transaction(async (tx) => {
-                const player = await tx.player.findFirst({ where: { userId: req.user.id } });
-                const marketData = await market.getOrCreateMarket(tx, player.roomId);
-                
-                const mapping = Object.values(market.MARKET_SYMBOLS).find(cfg => cfg.key === type);
-                if (!mapping) throw new Error("Invalid asset type");
-                
-                const price = marketData[mapping.priceField];
-                const cost = price * BigInt(qty);
+        const result = await prisma.$transaction(async (tx) => {
+          const player = await tx.player.findFirst({ where: { userId: req.user.id } });
+          const marketData = await market.getOrCreateMarket(tx, player.roomId);
 
-                if (player.cash < cost) throw new Error("Insufficient cash");
+          const mapping = Object.values(market.MARKET_SYMBOLS).find(cfg => cfg.key === type);
+          if (!mapping) throw new Error("Invalid asset type");
 
-                const assets = await tx.playerAsset.upsert({
-                    where: { playerId: player.id },
-                    update: { [type]: { increment: qty } },
-                    create: { playerId: player.id, [type]: qty }
-                });
-                
-                const updatedPlayer = await tx.player.update({
-                    where: { id: player.id },
-                    data: { cash: player.cash - cost }
-                });
+          const price = marketData[mapping.priceField];
+          const cost = price * BigInt(qty);
 
-                return { player: updatedPlayer, assets };
-            });
+          if (player.cash < cost) throw new Error("Insufficient cash");
 
-            await emitAssetUpdate(result.player.id);
-            return res.json({ ok: true });
-        } catch (e) {
-            return res.status(400).json({ error: e.message });
-        }
+          const assets = await tx.playerAsset.upsert({
+            where: { playerId: player.id },
+            update: { [type]: { increment: qty } },
+            create: { playerId: player.id, [type]: qty }
+          });
+
+          const updatedPlayer = await tx.player.update({
+            where: { id: player.id },
+            data: { cash: player.cash - cost }
+          });
+
+          return { player: updatedPlayer, assets };
+        });
+
+        await emitAssetUpdate(result.player.id);
+        return res.json({ ok: true });
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
+      }
     });
 
     router.post("/api/game/war/start", requireAuth, async (req, res) => {
-        try {
-            const result = await prisma.$transaction(async (tx) => {
-                const player = await tx.player.findFirst({ where: { userId: req.user.id } });
-                
-                if (warState.active) throw new Error("War already active");
-                if (player.location !== NODE_TYPE.WAR) throw new Error("Not at war node");
+      try {
+        const result = await prisma.$transaction(async (tx) => {
+          const player = await tx.player.findFirst({ where: { userId: req.user.id } });
 
-                const playerCount = await tx.player.count({ where: { roomId: player.roomId } });
-                
-                warState.active = true;
-                warState.warLine = getLineIndex(player.location);
-                warState.warNode = player.location;
-                warState.turnsLeft = playerCount; 
-                warState.recoveryActive = false;
+          if (warState.active) throw new Error("War already active");
+          if (player.location !== NODE_TYPE.WAR) throw new Error("Not at war node");
 
-                return { active: true };
-            });
-            
-            if (io) io.to(1).emit("war_start", { starterId: req.user.id }); 
-            return res.json(result);
-        } catch (e) {
-            return res.status(400).json({ error: e.message });
-        }
+          const playerCount = await tx.player.count({ where: { roomId: player.roomId } });
+
+          warState.active = true;
+          warState.warLine = getLineIndex(player.location);
+          warState.warNode = player.location;
+          warState.turnsLeft = playerCount;
+          warState.recoveryActive = false;
+
+          return { active: true };
+        });
+
+        if (io) io.to(1).emit("war_start", { starterId: req.user.id });
+        return res.json(result);
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
+      }
     });
 
     router.get("/api/me", requireAuth, async (req, res) => {
@@ -843,11 +844,11 @@ function createGameLogic({ prisma, io, market }) {
           const isActiveSocket = (sid) => !!sid && !!io && !!io.sockets && !!io.sockets.sockets && io.sockets.sockets.has(sid);
           const activeOthers = others.filter((p) => p.userId !== player.userId && isActiveSocket(p.socketId));
           if (activeOthers.some((p) => p.character === character)) throw new Error("Character already taken");
-          
+
           let cash = INITIAL_CASH;
           let assets = player.assets || await tx.playerAsset.create({ data: { playerId: player.id } });
           assets = await tx.playerAsset.update({ where: { playerId: player.id }, data: { samsung: 0, tesla: 0, lockheed: 0, gold: 0, bitcoin: 0 } });
-          
+
           if (character === CHARACTER_LABEL.MUSK) cash += MUSK_BONUS;
           if (character === CHARACTER_LABEL.LEE) {
             assets = await tx.playerAsset.update({ where: { playerId: player.id }, data: { samsung: LEE_START_SAMSUNG_SHARES } });
@@ -903,7 +904,7 @@ function createGameLogic({ prisma, io, market }) {
         if (isRemote && player.location !== 0) return res.status(400).json({ error: "Remote action not allowed" });
         const mapNode = await prisma.mapNode.findUnique({ where: { nodeIdx: targetNodeIdx } });
         if (!mapNode || mapNode.type !== "LAND") return res.status(400).json({ error: `Invalid tile type: ${mapNode?.type || "UNKNOWN"}` });
-        
+
         const result = await prisma.$transaction(async (tx) => {
           const freshPlayer = await tx.player.findUnique({ where: { id: player.id } });
           if (!freshPlayer) throw new Error("Player not found");
@@ -911,12 +912,12 @@ function createGameLogic({ prisma, io, market }) {
           if (currentTurn && currentTurn !== player.userId) throw new Error("Not your turn");
           const actionWindow = actionWindowByRoom.get(player.roomId);
           if (!actionWindow || actionWindow.userId !== player.userId || actionWindow.location !== player.location) throw new Error("Action window closed");
-          
+
           const freshLand = await tx.gameLand.findFirst({ where: { roomId: player.roomId, nodeIdx: targetNodeIdx } });
           const visitCount = getVisitCount(player.id, targetNodeIdx);
           const lastAction = getLastAction(player.id, targetNodeIdx);
           const canUpgrade = visitCount > 0 && lastAction !== "BUY" && lastAction !== "TAKEOVER";
-          
+
           if (action === "BUY") {
             if (isRemote) throw new Error("Remote action not allowed");
             if (freshLand && freshLand.ownerId != null) throw new Error("Land already owned");
@@ -939,11 +940,15 @@ function createGameLogic({ prisma, io, market }) {
             const landPrice = getEffectiveLandPrice(mapNode.baseToll, targetNodeIdx, true);
             const takeoverCost = landPrice * TAKEOVER_RATE_NUM / TAKEOVER_RATE_DEN;
             if (freshPlayer.cash < takeoverCost) throw new Error("Insufficient cash");
+            const owner = await tx.player.findUnique({ where: { id: freshLand.ownerId } });
             const updatedPlayer = await tx.player.update({ where: { id: player.id }, data: { cash: freshPlayer.cash - takeoverCost } });
+            const updatedOwner = owner
+              ? await tx.player.update({ where: { id: owner.id }, data: { cash: owner.cash + takeoverCost } })
+              : null;
             await tx.gameLand.update({ where: { id: freshLand.id }, data: { ownerId: player.id, isLandmark: false, purchasePrice: takeoverCost } });
             setVisitCount(player.id, targetNodeIdx, 0);
             setLastAction(player.id, targetNodeIdx, "TAKEOVER");
-            return { playerId: player.id, cash: updatedPlayer.cash, nodeIdx: targetNodeIdx, action, cost: takeoverCost };
+            return { playerId: player.id, cash: updatedPlayer.cash, nodeIdx: targetNodeIdx, action, cost: takeoverCost, ownerId: owner ? owner.id : null, ownerCash: updatedOwner ? updatedOwner.cash : null };
           }
           if (action === "LANDMARK") {
             if (!freshLand || freshLand.ownerId !== player.id) throw new Error("Not your land");
@@ -968,6 +973,19 @@ function createGameLogic({ prisma, io, market }) {
           throw new Error("Invalid action");
         });
         await emitAssetUpdate(result.playerId);
+        if (result.ownerId) await emitAssetUpdate(result.ownerId);
+
+        // 🔔 BroadCast Purchase/Takeover Event for Frontend Effects
+        if (io) {
+          io.to(player.roomId).emit("land_purchased", {
+            playerId: result.playerId,
+            userId: req.user.id,
+            nodeIdx: result.nodeIdx,
+            action: result.action, // 'BUY', 'TAKEOVER', 'LANDMARK', 'SELL'
+            cost: result.cost || result.refund,
+          });
+        }
+
         return res.json(result);
       } catch (e) {
         const message = e?.message || "Failed to purchase land";
@@ -984,23 +1002,23 @@ function createGameLogic({ prisma, io, market }) {
           if (!host) throw new Error("Player not found");
           if (host.location !== NODE_TYPE.WORLDCUP) throw new Error("Not on Worldcup spot");
           if (host.cash < WORLD_CUP_COST) throw new Error("Insufficient cash");
-          
+
           const hostLand = await tx.gameLand.findFirst({ where: { roomId: host.roomId, nodeIdx: targetNodeIdx, ownerId: host.id } });
           if (!hostLand) throw new Error("Land not owned");
-          
+
           const mapNode = await tx.mapNode.findUnique({ where: { nodeIdx: targetNodeIdx } });
           if (!mapNode || mapNode.type !== "LAND") throw new Error("Invalid land");
-          
+
           // 월드컵 플래그 설정
           await tx.gameLand.update({ where: { id: hostLand.id }, data: { hasWorldCup: true } });
-          
+
           const updatedHost = await tx.player.update({ where: { id: host.id }, data: { cash: host.cash - WORLD_CUP_COST } });
           const players = await tx.player.findMany({ where: { roomId: host.roomId } });
-          
+
           // 개최 후 통행료 로직 (즉시 이동 및 지불)
           const tollBase = getLandBaseToll(targetNodeIdx, mapNode.baseToll);
           const hostToll = applyWarMultiplier(applyTrumpBonus(tollBase, updatedHost.character), targetNodeIdx, true);
-          
+
           for (const p of players) {
             const movingData = { location: targetNodeIdx }; // 모두 강제 이동
             if (p.id !== updatedHost.id) {

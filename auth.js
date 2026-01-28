@@ -11,7 +11,9 @@ function signToken(user){
 
 function initAuth(app,prisma,options={}){
   const onLogin=options.onLogin;
-  const callbackURL = process.env.GOOGLE_CALLBACK_URL || "http://localhost:5173/api/auth/google/callback";
+  const callbackURL =
+    process.env.GOOGLE_CALLBACK_URL ||
+    "http://ec2-3-37-103-167.ap-northeast-2.compute.amazonaws.com:3000/api/auth/google/callback";
   passport.use(new GoogleStrategy({
     clientID:process.env.GOOGLE_CLIENT_ID,
     clientSecret:process.env.GOOGLE_CLIENT_SECRET,
