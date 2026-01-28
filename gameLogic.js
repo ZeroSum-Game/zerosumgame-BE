@@ -550,7 +550,7 @@ function createGameLogic({ prisma, io, market }) {
       let mapPriceUpdate = null;
       const shouldInflate = !turnState.rolled && !turnState.extraRoll;
       if (shouldInflate) {
-        const landNodes = await tx.mapNode.findMany({ where: { type: { in: ["LAND", "COUNTRY"] } } }); // Ensure we get countries too if types differ
+        const landNodes = await tx.mapNode.findMany({ where: { type: { in: ["LAND", "ISLAND"] } } }); // Ensure we get countries too if types differ
         const priceUpdates = {};
         for (const node of landNodes) {
           const current = Number(node.basePrice ?? 0);
