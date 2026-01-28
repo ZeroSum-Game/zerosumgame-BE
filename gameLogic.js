@@ -8,6 +8,7 @@ const LEE_START_SAMSUNG_SHARES = 10;
 const TRUMP_TOLL_BONUS_RATE = 0.1;
 const MINIGAME_REWARD = 500000n;
 const minigameRewardByRoom = new Map();
+const warBonusByPlayerId = new Map();
 const PUTIN_WAR_BONUS = 10; // 전쟁 승률 10% 증가
 
 // 전쟁 승률 관련 상수
@@ -428,6 +429,39 @@ function createGameLogic({ prisma, io, market }) {
     return Number(cash) + weightedStock + weightedGold + weightedCoin;
   }
 
+  function applyWarBonus(winRate, defenderBonus) {
+    if (!defenderBonus) return winRate;
+    const bonus = Number(defenderBonus) || 0;
+    if (!bonus) return winRate;
+    // If winRate is in percent scale (e.g., 25~80), adjust by bonus*100
+    const adjusted = winRate > 1 ? winRate - bonus * 100 : winRate - bonus;
+    if (winRate > 1) return clamp(adjusted, WAR_FINAL_MIN, WAR_FINAL_MAX);
+    return clamp(adjusted, 0.05, 0.95);
+  }
+
+  function setWarBonus(playerId, bonus, turns = 2) {
+    if (!playerId) return;
+    const value = Number(bonus) || 0;
+    if (!value) return;
+    warBonusByPlayerId.set(playerId, { bonus: value, turns: Math.max(1, Number(turns) || 1) });
+  }
+
+  function getWarBonus(playerId) {
+    const entry = warBonusByPlayerId.get(playerId);
+    return entry ? entry.bonus : 0;
+  }
+
+  function tickWarBonuses(playerIds) {
+    if (!Array.isArray(playerIds)) return;
+    for (const id of playerIds) {
+      const entry = warBonusByPlayerId.get(id);
+      if (!entry) continue;
+      const nextTurns = (entry.turns || 0) - 1;
+      if (nextTurns <= 0) warBonusByPlayerId.delete(id);
+      else warBonusByPlayerId.set(id, { bonus: entry.bonus, turns: nextTurns });
+    }
+  }
+
   function calcWarWinRate({ myAsset, oppAsset, character }) {
     const ratio = myAsset + oppAsset === 0 ? 0.5 : myAsset / (myAsset + oppAsset);
     const baseRaw = WAR_BASE_RATE + (ratio * WAR_RATIO_RATE);
@@ -658,6 +692,10 @@ function createGameLogic({ prisma, io, market }) {
       }
 
       // 턴 정보 갱신
+      // Refresh totalAsset based on latest DB state before emitting
+      const totals = await computeTotals(tx, updatedPlayer.id);
+      updatedPlayer = await tx.player.update({ where: { id: updatedPlayer.id }, data: { totalAsset: totals.totalAsset } });
+
       const turnPlayerId = await getTurnPlayerId(tx, updatedPlayer.roomId);
       const turnUserId = currentTurnUserByRoom.get(updatedPlayer.roomId) || player.userId;
 
@@ -695,15 +733,16 @@ function createGameLogic({ prisma, io, market }) {
           if (!player.isResting) throw new Error("Not in space travel mode");
 
           const oldLocation = player.location;
-          const passedStart = false; // Space travel jump usually does not trigger Start bonus
+          const passedStart = targetNode < oldLocation;
 
           const marketData = await market.getOrCreateMarket(tx, player.roomId);
           let eventResult = null;
 
           // 이동 처리 (우주여행 종료)
+          const salary = passedStart ? 2000000n : 0n;
           let updated = await tx.player.update({
             where: { id: player.id },
-            data: { location: targetNode, isResting: false }
+            data: { location: targetNode, isResting: false, cash: player.cash + salary }
           });
 
           // 국세청 도착 시 세금 징수
@@ -1211,7 +1250,9 @@ function createGameLogic({ prisma, io, market }) {
           const marketData = await market.getOrCreateMarket(tx, me.roomId);
           const myAsset = calcWarAssetValue(me.assets || { samsung: 0, tesla: 0, lockheed: 0, gold: 0, bitcoin: 0 }, marketData, me.cash);
           const oppAsset = calcWarAssetValue(opp.assets || { samsung: 0, tesla: 0, lockheed: 0, gold: 0, bitcoin: 0 }, marketData, opp.cash);
-          const winRate = calcWarWinRate({ myAsset, oppAsset, character: me.character });
+          let winRate = calcWarWinRate({ myAsset, oppAsset, character: me.character });
+          const defenderBonus = getWarBonus(opp.id);
+          winRate = applyWarBonus(winRate, defenderBonus);
           return { myAsset, oppAsset, winRate };
         });
         return res.json(result);
@@ -1276,6 +1317,11 @@ function createGameLogic({ prisma, io, market }) {
     rollDiceForUser,
     calcWarAssetValue,
     calcWarWinRate,
+    applyWarBonus,
+    setWarBonus,
+    getWarBonus,
+    tickWarBonuses,
+
     applyTrumpBonus,
     autoSellAssets,
     getLandBaseToll,
