@@ -445,7 +445,11 @@ function createGameLogic({ prisma, io, market }) {
 
   async function autoSellAssets(tx, player, amount, marketData) {
     if (player.cash >= amount) return { player, autoSales: [], covered: true };
-    const assets = player.assets || await tx.playerAsset.create({ data: { playerId: player.id } });
+    const assets = player.assets || await tx.playerAsset.upsert({
+      where: { playerId: player.id },
+      update: {},
+      create: { playerId: player.id }
+    });
     const sellOrder = [
       { key: "bitcoin", price: marketData.priceBtc },
       { key: "gold", price: marketData.priceGold },
@@ -689,6 +693,9 @@ function createGameLogic({ prisma, io, market }) {
           const player = await tx.player.findFirst({ where: { userId: req.user.id }, orderBy: { id: "desc" } });
           if (!player) throw new Error("Player not found");
           if (!player.isResting) throw new Error("Not in space travel mode");
+
+          const oldLocation = player.location;
+          const passedStart = false; // Space travel jump usually does not trigger Start bonus
 
           const marketData = await market.getOrCreateMarket(tx, player.roomId);
           let eventResult = null;
