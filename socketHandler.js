@@ -82,6 +82,32 @@
     };
   }
 
+  function buildMarketPayload(marketRow){
+    return {
+      samsung: marketRow.priceSamsung,
+      tesla: marketRow.priceTesla,
+      lockheed: marketRow.priceLockheed,
+      gold: marketRow.priceGold,
+      bitcoin: marketRow.priceBtc,
+      prevSamsung: marketRow.prevSamsung,
+      prevTesla: marketRow.prevTesla,
+      prevLockheed: marketRow.prevLockheed,
+      prevGold: marketRow.prevGold,
+      prevBtc: marketRow.prevBtc
+    };
+  }
+
+  function computeTotalAssetForPlayer(player, marketRow){
+    const assets = player.assets || { samsung: 0, tesla: 0, lockheed: 0, gold: 0, bitcoin: 0 };
+    const landTotal = Array.isArray(player.lands) ? player.lands.reduce((sum, land) => sum + BigInt(land.purchasePrice || 0), 0n) : 0n;
+    const stockTotal = BigInt(assets.samsung) * marketRow.priceSamsung
+      + BigInt(assets.tesla) * marketRow.priceTesla
+      + BigInt(assets.lockheed) * marketRow.priceLockheed
+      + BigInt(assets.gold) * marketRow.priceGold
+      + BigInt(assets.bitcoin) * marketRow.priceBtc;
+    return player.cash + landTotal + stockTotal;
+  }
+
   function broadcastMinigame(roomId){
     const state=minigameStateByRoom.get(roomId);
     if(!state||!io) return;
@@ -840,9 +866,137 @@
           socket.emit("draw_error",{message:"Invalid card"});
           return;
         }
-        io.to(info.roomId).emit("drawCard",{...card,userId:info.userId,playerId:player.id});
+        io.to(info.roomId).emit("drawCard",{ card, drawerUserId: info.userId, drawerPlayerId: player.id });
       }catch(err){
         socket.emit("draw_error",{message:"Failed to draw card"});
+      }
+    });
+
+    socket.on("golden_key_apply", async (payload) => {
+      try {
+        const info = socketUserMap.get(socket.id);
+        if (!info) {
+          socket.emit("draw_error", { message: "Room not joined" });
+          return;
+        }
+        const card = payload?.card;
+        if (!card || card.id == null) {
+          socket.emit("draw_error", { message: "Invalid card" });
+          return;
+        }
+
+        const result = await prisma.$transaction(async (tx) => {
+          const roomId = info.roomId;
+          const marketRow = await market.getOrCreateMarket(tx, roomId);
+          const players = await tx.player.findMany({ where: { roomId }, include: { assets: true, lands: true } });
+          if (!players.length) throw new Error("Player not found");
+
+          const drawer = players.find((p) => p.userId === info.userId) || players[0];
+          const totals = players.map((p) => ({ id: p.id, total: computeTotalAssetForPlayer(p, marketRow) }));
+          const sorted = totals.slice().sort((a, b) => (a.total > b.total ? -1 : a.total < b.total ? 1 : 0));
+          const poorest = sorted[sorted.length - 1] || null;
+
+          const affectedPlayerIds = new Set();
+          let marketUpdated = false;
+          let updatedMarket = marketRow;
+
+          const applyMarketChange = async (symbol, deltaRate) => {
+            const norm = market.normalizeSymbol(symbol);
+            if (!norm) return;
+            const meta = market.MARKET_SYMBOLS[norm];
+            const priceField = meta.priceField;
+            const prevField = meta.prevField;
+            const currentPrice = marketRow[priceField];
+            const nextPrice = market.applyMarketDelta(currentPrice, Number(deltaRate || 0));
+            updatedMarket = await tx.market.update({
+              where: { roomId },
+              data: { [priceField]: nextPrice, [prevField]: currentPrice },
+            });
+            marketUpdated = true;
+          };
+
+          const addCash = async (playerId, amount) => {
+            if (!playerId || amount == null) return;
+            const amt = BigInt(Math.max(0, Math.round(Number(amount))));
+            const player = players.find((p) => p.id === playerId);
+            if (!player) return;
+            await tx.player.update({ where: { id: playerId }, data: { cash: player.cash + amt } });
+            affectedPlayerIds.add(playerId);
+          };
+
+          const subtractCash = async (playerId, amount) => {
+            if (!playerId || amount == null) return;
+            const amt = BigInt(Math.max(0, Math.round(Number(amount))));
+            const player = players.find((p) => p.id === playerId);
+            if (!player) return;
+            const nextCash = player.cash > amt ? player.cash - amt : 0n;
+            await tx.player.update({ where: { id: playerId }, data: { cash: nextCash } });
+            affectedPlayerIds.add(playerId);
+          };
+
+          switch (card.id) {
+            case 1:
+            case 3:
+            case 4:
+            case 9:
+            case 10:
+            case 17: {
+              await applyMarketChange(card.symbol, card.effectValue ?? 0.2);
+              break;
+            }
+            case 12: {
+              await applyMarketChange(card.symbol, card.effectValue ?? -0.1);
+              break;
+            }
+            case 5: {
+              await subtractCash(card.playerId, card.amount ?? 0);
+              break;
+            }
+            case 6: {
+              if (poorest) {
+                await addCash(poorest.id, card.amount ?? 0);
+              }
+              break;
+            }
+            case 13: {
+              const perLand = Math.max(0, Math.round(Number(card.amount ?? 0)));
+              for (const p of players) {
+                const count = Array.isArray(p.lands) ? p.lands.length : 0;
+                if (count <= 0) continue;
+                const total = BigInt(perLand * count);
+                const nextCash = p.cash > total ? p.cash - total : 0n;
+                await tx.player.update({ where: { id: p.id }, data: { cash: nextCash } });
+                affectedPlayerIds.add(p.id);
+              }
+              break;
+            }
+            case 14:
+            case 16: {
+              await addCash(drawer.id, card.amount ?? 0);
+              break;
+            }
+            case 20: {
+              const totalAsset = computeTotalAssetForPlayer(drawer, marketRow);
+              const pct = Number(card.effectValue ?? 0.05);
+              const gain = Math.max(0, Math.round(Number(totalAsset) * pct));
+              await addCash(drawer.id, gain);
+              break;
+            }
+            default:
+              break;
+          }
+
+          return { roomId, affectedPlayerIds: Array.from(affectedPlayerIds), marketUpdated, updatedMarket };
+        });
+
+        if (result.marketUpdated) {
+          io.to(result.roomId).emit("market_update", buildMarketPayload(result.updatedMarket));
+        }
+        for (const playerId of result.affectedPlayerIds) {
+          await gameLogic.emitAssetUpdate(playerId);
+        }
+      } catch (err) {
+        socket.emit("draw_error", { message: "Failed to apply golden key" });
       }
     });
 
