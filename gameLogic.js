@@ -547,6 +547,22 @@ function createGameLogic({ prisma, io, market }) {
       });
       let marketData = await tx.market.update({ where: { roomId: player.roomId }, data: driftUpdates });
 
+      let mapPriceUpdate = null;
+      const shouldInflate = !turnState.rolled && !turnState.extraRoll;
+      if (shouldInflate) {
+        const landNodes = await tx.mapNode.findMany({ where: { type: { in: ["LAND", "COUNTRY"] } } }); // Ensure we get countries too if types differ
+        const priceUpdates = {};
+        for (const node of landNodes) {
+          const current = Number(node.basePrice ?? 0);
+          // -5% ~ +5% fluctuation
+          const rate = (Math.random() * 0.1) - 0.05;
+          const nextPrice = Math.max(1, Math.round(current * (1 + rate)));
+          await tx.mapNode.update({ where: { nodeIdx: node.nodeIdx }, data: { basePrice: nextPrice } });
+          priceUpdates[node.nodeIdx] = nextPrice;
+        }
+        mapPriceUpdate = priceUpdates;
+      }
+
       // 플레이어 위치 이동
       let updatedPlayer = await tx.player.update({
         where: { id: player.id },
@@ -650,6 +666,7 @@ function createGameLogic({ prisma, io, market }) {
         turnPlayerId,
         turnUserId,
         market: marketData,
+        mapPriceUpdate,
         war: getWarPayload(),
         autoSellEvents,
         actionRequired,
@@ -688,7 +705,7 @@ function createGameLogic({ prisma, io, market }) {
             updated = await tx.player.findUnique({ where: { id: player.id } });
           }
 
-          return { player: updated, userId: req.user.id, roomId: player.roomId, eventResult, isKeyNode: KEY_NODES.includes(targetNode) };
+          return { player: updated, userId: req.user.id, roomId: player.roomId, eventResult, isKeyNode: KEY_NODES.includes(targetNode), passedStart, oldLocation };
         });
 
         // 우주여행 도착 후 액션 윈도우 설정 (거래/구매 등 허용)
@@ -702,7 +719,8 @@ function createGameLogic({ prisma, io, market }) {
           type: "SPACE",
           eventResult: result.eventResult,
           isKeyNode: result.isKeyNode,
-          passedStart: false
+          passedStart: result.passedStart,
+          oldLocation: result.oldLocation
         });
         return res.json(result);
       } catch (e) {

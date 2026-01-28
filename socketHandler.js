@@ -820,6 +820,9 @@
             if(result.market){
               io.to(result.roomId).emit("market_update",{samsung:result.market.priceSamsung,tesla:result.market.priceTesla,lockheed:result.market.priceLockheed,gold:result.market.priceGold,bitcoin:result.market.priceBtc,prevSamsung:result.market.prevSamsung,prevTesla:result.market.prevTesla,prevLockheed:result.market.prevLockheed,prevGold:result.market.prevGold,prevBtc:result.market.prevBtc});
             }
+            if(result.mapPriceUpdate){
+              io.to(result.roomId).emit("map_price_update",{ prices: result.mapPriceUpdate });
+            }
             if(result.war){
               io.to(result.roomId).emit("war_state",result.war);
               if(result.warStarted)io.to(result.roomId).emit("war_start",result.war);
@@ -899,6 +902,39 @@
           const affectedPlayerIds = new Set();
           let marketUpdated = false;
           let updatedMarket = marketRow;
+          let landPriceUpdate = null;
+
+          const applyLandPriceChange = async (deltaRate) => {
+            const landNodes = await tx.mapNode.findMany({ where: { type: "LAND" } });
+            const updates = {};
+            for (const node of landNodes) {
+              const current = Number(node.basePrice ?? 0);
+              const nextPrice = Math.max(1, Math.round(current * (1 + Number(deltaRate || 0))));
+              await tx.mapNode.update({ where: { nodeIdx: node.nodeIdx }, data: { basePrice: nextPrice } });
+              updates[node.nodeIdx] = nextPrice;
+            }
+            return updates;
+          };
+
+          const applyLandTollChange = async (nodeIdxList, deltaRate) => {
+            const nodeIds = Array.isArray(nodeIdxList) ? nodeIdxList : [];
+            if (nodeIds.length === 0) return;
+            for (const nodeIdx of nodeIds) {
+              const node = await tx.mapNode.findUnique({ where: { nodeIdx } });
+              if (!node) continue;
+              const current = Number(node.baseToll ?? 0);
+              const nextToll = Math.max(1, Math.round(current * (1 + Number(deltaRate || 0))));
+              await tx.mapNode.update({ where: { nodeIdx }, data: { baseToll: nextToll } });
+            }
+          };
+
+          const applyLandTollByContinent = async (continent, deltaRate, extraIds=[]) => {
+            if (!continent) return;
+            const nodes = await tx.mapNode.findMany({ where: { type: "LAND", continent } });
+            const ids = nodes.map((n) => n.nodeIdx).concat(Array.isArray(extraIds) ? extraIds : []);
+            const uniqueIds = Array.from(new Set(ids));
+            await applyLandTollChange(uniqueIds, deltaRate);
+          };
 
           const applyMarketChange = async (symbol, deltaRate) => {
             const norm = market.normalizeSymbol(symbol);
@@ -948,6 +984,31 @@
               await applyMarketChange(card.symbol, card.effectValue ?? -0.1);
               break;
             }
+            case 2: {
+              await applyLandTollByContinent(card.continent, card.effectValue ?? 0.15);
+              break;
+            }
+            case 7: {
+              landPriceUpdate = await applyLandPriceChange(card.effectValue ?? 0.1);
+              break;
+            }
+            case 11: {
+              const extraIds = card.extra && Array.isArray(card.extra.countryIds) ? card.extra.countryIds : [];
+              await applyLandTollByContinent(card.continent, -(Math.abs(card.effectValue ?? 0.15)), extraIds);
+              break;
+            }
+            case 15: {
+              const nodes = await tx.mapNode.findMany({ where: { type: "LAND" } });
+              const ids = nodes.map((n) => n.nodeIdx);
+              await applyLandTollChange(ids, -(Math.abs(card.effectValue ?? 0.1)));
+              break;
+            }
+            case 19: {
+              if (card.countryId != null) {
+                await applyLandTollChange([card.countryId], card.effectValue ?? 0.3);
+              }
+              break;
+            }
             case 5: {
               await subtractCash(card.playerId, card.amount ?? 0);
               break;
@@ -986,11 +1047,14 @@
               break;
           }
 
-          return { roomId, affectedPlayerIds: Array.from(affectedPlayerIds), marketUpdated, updatedMarket };
+          return { roomId, affectedPlayerIds: Array.from(affectedPlayerIds), marketUpdated, updatedMarket, landPriceUpdate };
         });
 
         if (result.marketUpdated) {
           io.to(result.roomId).emit("market_update", buildMarketPayload(result.updatedMarket));
+        }
+        if (result.landPriceUpdate) {
+          io.to(result.roomId).emit("map_price_update", { prices: result.landPriceUpdate });
         }
         for (const playerId of result.affectedPlayerIds) {
           await gameLogic.emitAssetUpdate(playerId);
@@ -1096,7 +1160,7 @@
               if(a.totalAsset===b.totalAsset)return 0;
               return a.totalAsset>b.totalAsset?-1:1;
             })
-            .map((p)=>({playerId:p.id,totalAsset:p.totalAsset}));
+            .map((p)=>({playerId:p.id,netWorth:p.totalAsset}));
           const playersPayload = latestPlayers.map((p)=>({
             playerId: p.id,
             userId: p.userId,
@@ -1109,6 +1173,12 @@
           io.to(info.roomId).emit("game_end",{rankings,maxTurn:turnResult.room.maxTurn,players:playersPayload});
           return;
         }
+
+        // Sync assets for all players at turn end to avoid stale UI
+        try{
+          const latestPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
+          await Promise.all(latestPlayers.map((p)=>gameLogic.emitAssetUpdate(p.id)));
+        }catch(err){}
 
         if(turnResult.nextUserId){
           gameLogic.currentTurnUserByRoom.set(info.roomId,turnResult.nextUserId);
@@ -1164,6 +1234,17 @@
             where:{roomId:info.roomId,ownerId:loserId}
           });
 
+          let cashPenaltyApplied=false;
+          let cashPenaltyAmount=1000000n;
+          if(loserLands.length===0){
+            const penalty=1000000n;
+            const actualPenalty=loser.cash<penalty?loser.cash:penalty;
+            await tx.player.update({where:{id:loserId},data:{cash:loser.cash-actualPenalty}});
+            await tx.player.update({where:{id:winnerId},data:{cash:winner.cash+actualPenalty}});
+            cashPenaltyApplied=true;
+            cashPenaltyAmount=actualPenalty;
+          }
+
           return {
             winnerId,
             loserId,
@@ -1172,7 +1253,8 @@
             winRate:winRate*100,
             attackerWins,
             loserLands:loserLands.map(l=>l.nodeIdx),
-            cashPenalty:1000000 // 땅이 없을 경우 100만원
+            cashPenalty:Number(cashPenaltyAmount),
+            cashPenaltyApplied
           };
         });
 
@@ -1187,6 +1269,11 @@
           loserLands:result.loserLands,
           cashPenalty:result.cashPenalty
         });
+
+        if(result.cashPenaltyApplied){
+          await gameLogic.emitAssetUpdate(result.winnerId);
+          await gameLogic.emitAssetUpdate(result.loserId);
+        }
 
       }catch(err){
         console.error("[start_war_fight] error:",err);
