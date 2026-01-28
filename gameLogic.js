@@ -400,7 +400,19 @@ function createGameLogic({ prisma, io, market }) {
       const payload = await prisma.$transaction(async (tx) => {
         const totals = await computeTotals(tx, playerId);
         await tx.player.update({ where: { id: playerId }, data: { totalAsset: totals.totalAsset } });
-        return { roomId: totals.player.roomId, userId: totals.player.userId, cash: totals.player.cash, totalAsset: totals.totalAsset };
+        return {
+          roomId: totals.player.roomId,
+          userId: totals.player.userId,
+          cash: totals.player.cash,
+          totalAsset: totals.totalAsset,
+          assets: {
+            samsung: totals.assets?.samsung ?? 0,
+            tesla: totals.assets?.tesla ?? 0,
+            lockheed: totals.assets?.lockheed ?? 0,
+            gold: totals.assets?.gold ?? 0,
+            bitcoin: totals.assets?.bitcoin ?? 0,
+          },
+        };
       });
       io.to(payload.roomId).emit("asset_update", payload);
     } catch (e) { }
