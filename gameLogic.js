@@ -527,12 +527,10 @@ function createGameLogic({ prisma, io, market }) {
       }
       if (turnState.rolled && !turnState.extraRoll) throw new Error("Already rolled");
 
-      // 주사위 굴리기 (테스트: 첫 주사위는 항상 2칸)
-      const firstRollDone = firstRollByRoom.get(player.roomId) === true;
-      const dice1 = firstRollDone ? (Math.floor(Math.random() * 6) + 1) : 1;
-      const dice2 = firstRollDone ? (Math.floor(Math.random() * 6) + 1) : 1;
-      const isDouble = firstRollDone ? dice1 === dice2 : false;
-      if (!firstRollDone) firstRollByRoom.set(player.roomId, true);
+      // 주사위 굴리기 
+      const dice1 = Math.floor(Math.random() * 6) + 1;
+      const dice2 = Math.floor(Math.random() * 6) + 1;
+      const isDouble = dice1 === dice2;
       const oldLocation = player.location;
       const newLocation = (oldLocation + dice1 + dice2) % 32;
       const passedStart = newLocation < oldLocation;

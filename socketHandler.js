@@ -933,6 +933,9 @@
 
         if(turnResult.reachedEnd){
           const latestPlayers=await gameLogic.getLatestPlayersByUser(prisma,info.roomId);
+          const userIds = latestPlayers.map((p)=>p.userId);
+          const users = userIds.length ? await prisma.user.findMany({where:{id:{in:userIds}},select:{id:true,nickname:true}}) : [];
+          const nicknameByUser = new Map(users.map((u)=>[u.id,u.nickname]));
           const rankings=latestPlayers
             .slice()
             .sort((a,b)=>{
@@ -940,7 +943,16 @@
               return a.totalAsset>b.totalAsset?-1:1;
             })
             .map((p)=>({playerId:p.id,totalAsset:p.totalAsset}));
-          io.to(info.roomId).emit("game_end",{rankings,maxTurn:turnResult.room.maxTurn});
+          const playersPayload = latestPlayers.map((p)=>({
+            playerId: p.id,
+            userId: p.userId,
+            nickname: nicknameByUser.get(p.userId)||`Player${p.userId}`,
+            character: p.character||null,
+            location: typeof p.location==="number"?p.location:0,
+            cash: p.cash,
+            totalAsset: p.totalAsset
+          }));
+          io.to(info.roomId).emit("game_end",{rankings,maxTurn:turnResult.room.maxTurn,players:playersPayload});
           return;
         }
 
