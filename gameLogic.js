@@ -787,6 +787,128 @@ function createGameLogic({ prisma, io, market }) {
       } catch (e) { return res.status(500).json({ error: "Failed to load user" }); }
     });
 
+
+    router.post("/api/game/golden-key", requireAuth, async (req, res) => {
+      try {
+        const { card } = req.body;
+        if (!card || !card.id) return res.status(400).json({ error: "Invalid card" });
+
+        const result = await prisma.$transaction(async (tx) => {
+          const player = await tx.player.findFirst({ where: { userId: req.user.id }, orderBy: { id: "desc" } });
+          if (!player) throw new Error("Player not found");
+
+          const roomId = player.roomId;
+          let marketData = await market.getOrCreateMarket(tx, roomId);
+          let updatedPlayer = player;
+          const updates = { market: false, player: false, lands: false };
+
+          // 1. Market Update (Stock Prices)
+          if (card.targetType === 'STOCK' && card.symbol && card.effectValue) {
+            const sym = card.symbol.toLowerCase(); // samsung, tesla...
+            // map symbol strings to market fields if needed
+            const fieldMap = {
+              'SAMSUNG': 'priceSamsung',
+              'TESLA': 'priceTesla',
+              'LOCKHEED': 'priceLockheed',
+              'GOLD': 'priceGold',
+              'BITCOIN': 'priceBtc'
+            };
+            const field = fieldMap[card.symbol];
+            if (field && marketData[field]) {
+              const currentPrice = Number(marketData[field]);
+              const newPrice = Math.max(1, Math.round(currentPrice * (1 + card.effectValue)));
+              marketData = await tx.market.update({
+                where: { roomId },
+                data: { [field]: BigInt(newPrice) }
+              });
+              updates.market = true;
+            }
+          }
+
+          // 2. Cash Update (Player Amount)
+          if (card.amount) {
+            let diff = BigInt(Math.round(card.amount));
+            // If targetType is PLAYER/PLAYERS and amount is cost (e.g. tax), handle logic
+            // But for simplicity, we assume frontend sends the final 'amount' to add (positive) or subtract (negative)?
+            // Actually frontend 'amount' is usually positive. We need to check card logic.
+            // Case 5: 'Security Cost' -> pay
+            // Case 6: 'Support' -> receive
+            // The frontend logic usually handles the direction. 
+            // To be safe, we might need the frontend to send `cashDelta` explicitly or handle specific IDs.
+            // Let's trust card.id for sign.
+            const PAY_IDS = [5, 13]; // Cards that cost money
+            if (PAY_IDS.includes(card.id)) {
+              updatedPlayer = await tx.player.update({
+                where: { id: player.id },
+                data: { cash: player.cash - diff }
+              });
+            } else {
+              // Default receive
+              updatedPlayer = await tx.player.update({
+                where: { id: player.id },
+                data: { cash: player.cash + diff }
+              });
+            }
+            updates.player = true;
+          }
+
+          // 3. Land Value Update (GameLand purchasePrice)
+          // Case 7: Real estate boom (global)
+          if (card.id === 7 && card.effectValue) {
+            const lands = await tx.gameLand.findMany({ where: { roomId } });
+            for (const land of lands) {
+              const newPrice = BigInt(Math.round(Number(land.purchasePrice) * (1 + card.effectValue)));
+              await tx.gameLand.update({ where: { id: land.id }, data: { purchasePrice: newPrice } });
+            }
+            updates.lands = true;
+          }
+
+          // Re-compute totals
+          const totals = await computeTotals(tx, updatedPlayer.id);
+
+          return {
+            player: updatedPlayer,
+            market: marketData,
+            updates,
+            totalAsset: totals.totalAsset
+          };
+        });
+
+        // Broadcast updates
+        if (result.updates.market) {
+          io.to(result.player.roomId).emit("market_update", {
+            samsung: result.market.priceSamsung,
+            tesla: result.market.priceTesla,
+            lockheed: result.market.priceLockheed,
+            gold: result.market.priceGold,
+            bitcoin: result.market.priceBtc,
+            // ... include prev if needed
+            prevSamsung: result.market.prevSamsung,
+            prevTesla: result.market.prevTesla,
+            prevLockheed: result.market.prevLockheed,
+            prevGold: result.market.prevGold,
+            prevBtc: result.market.prevBtc
+          });
+        }
+
+        // Asset update for the player (or all players if global land update)
+        if (result.updates.lands) {
+          // For global land update, update everyone in room
+          const allPlayers = await prisma.player.findMany({ where: { roomId: result.player.roomId } });
+          for (const p of allPlayers) {
+            await emitAssetUpdate(p.id);
+          }
+        } else {
+          await emitAssetUpdate(result.player.id);
+        }
+
+        return res.json({ ok: true, totalAsset: result.totalAsset });
+      } catch (e) {
+        console.error("[GoldenKey] Error:", e);
+        return res.status(500).json({ error: e.message });
+      }
+    });
+
     router.post("/api/news", requireAuth, async (req, res) => {
       try {
         const round = Number(req.body?.round ?? 0);
